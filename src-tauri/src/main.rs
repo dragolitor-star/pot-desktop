@@ -43,14 +43,19 @@ pub struct StringWrapper(pub Mutex<String>);
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, cwd| {
-            Notification::new(&app.config().tauri.bundle.identifier)
-                .title("The program is already running. Please do not start it again!")
-                .body(cwd)
-                .icon("pot")
-                .show()
-                .unwrap();
-        }))
+        // TODO: re-enable when plugins-workspace v1 fix lands.
+        // tauri_plugin_single_instance v1 (post commit fa8ee1d on plugins-workspace
+        // v1 branch) triggers a Windows null-pointer dereference under newer Rust
+        // UB checks. Single-instance is nice-to-have (prevents double-launch),
+        // not worth the crash risk for end users. Becomes moot at Tauri 2 (Phase 7).
+        //.plugin(tauri_plugin_single_instance::init(|app, _, cwd| {
+        //    Notification::new(&app.config().tauri.bundle.identifier)
+        //        .title("The program is already running. Please do not start it again!")
+        //        .body(cwd)
+        //        .icon("pot")
+        //        .show()
+        //        .unwrap();
+        //}))
         .plugin(
             tauri_plugin_log::Builder::default()
                 .targets([LogTarget::LogDir, LogTarget::Stdout])
