@@ -8,11 +8,13 @@ import toast, { Toaster } from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import { MdInsertDriveFile, MdTranslate, MdCancel, MdFileDownload, MdArrowBack } from 'react-icons/md';
 import { listen } from '@tauri-apps/api/event';
+import { appWindow } from '@tauri-apps/api/window';
+
 
 import { useToastStyle, useConfig } from '../../hooks';
 import * as builtinServices from '../../services/translate';
 import { fetchActiveGlossary, applyGlossaryPostTranslate, BUILTIN_LLM_ENGINES } from '../../utils/glossary';
-import { getServiceName, whetherPluginService, getInstanceName } from '../../utils/service_instance';
+import { getServiceName, whetherPluginService } from '../../utils/service_instance';
 
 const LANG_OPTIONS = [
     { value: 'auto', label: 'Auto Detect' },
@@ -34,6 +36,13 @@ const LANG_OPTIONS = [
 export default function Document() {
     const { t } = useTranslation();
     const toastStyle = useToastStyle();
+
+    useEffect(() => {
+        if (appWindow.label === 'document') {
+            appWindow.show();
+        }
+    }, []);
+
 
     // Config states from App
     const [translateServiceInstanceList] = useConfig('translate_service_list', ['google']);

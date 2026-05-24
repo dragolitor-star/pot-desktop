@@ -109,6 +109,8 @@ fn build_window(label: &str, title: &str) -> (Window, bool) {
             }
             let _ = window.current_monitor();
             (window, false)
+
+
         }
     }
 }
