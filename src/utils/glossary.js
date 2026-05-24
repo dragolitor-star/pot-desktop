@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/tauri';
+
 // Shared glossary application helpers — Phase 1.
 //
 // LLM engines (Gemini, OpenAI, Claude, ChatGLM, Ollama, …) call
@@ -110,6 +112,33 @@ export function applyGlossaryPostTranslate(text, entries) {
         result = result.replace(re, (_match, leading) => leading + (entry.target_term ?? ''));
     }
     return result;
+}
+
+// Built-in translation engines that operate on a prompt (LLM-style).
+// Engines NOT in this list are treated as classical (output post-processed
+// at the dispatcher with applyGlossaryPostTranslate). External `.potext`
+// plugins are out of scope for Phase 1 (directive #5).
+export const BUILTIN_LLM_ENGINES = ['geminipro', 'openai', 'chatglm', 'ollama'];
+
+/**
+ * Fetch the currently-applicable glossary entries from the Rust side.
+ * Never throws — returns an empty array on any failure so translation
+ * is never blocked by a glossary problem (per "fail-soft" design).
+ *
+ * @param {string} sourceLang — short ISO-ish code or '*' for wildcard
+ * @param {string} targetLang
+ * @param {string | null} [scope] — optional domain (e.g. 'tech')
+ * @returns {Promise<Array<object>>}
+ */
+export async function fetchActiveGlossary(sourceLang, targetLang, scope = null) {
+    try {
+        const entries = await invoke('get_active_glossary', { sourceLang, targetLang, scope });
+        return Array.isArray(entries) ? entries : [];
+    } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Glossary fetch failed:', e);
+        return [];
+    }
 }
 
 // Internal exports for tests in Commit #7.

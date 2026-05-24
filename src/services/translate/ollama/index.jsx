@@ -1,5 +1,6 @@
 import { Language } from './info';
 import { Ollama } from 'ollama/browser';
+import { applyGlossaryToPrompt } from '../../../utils/glossary';
 
 export async function translate(text, from, to, options = {}) {
     const { config, setResult, detect } = options;
@@ -13,6 +14,20 @@ export async function translate(text, from, to, options = {}) {
         requestPath = requestPath.slice(0, -1);
     }
     const ollama = new Ollama({ host: requestPath });
+
+    // Glossary injection (Phase 1) — runs before variable substitution.
+    const glossaryEntries = options.glossaryEntries ?? [];
+    if (glossaryEntries.length > 0) {
+        let injIdx = promptList.findIndex((m) => m.role === 'system');
+        if (injIdx === -1) injIdx = promptList.findIndex((m) => m.role === 'user');
+        if (injIdx !== -1) {
+            promptList = promptList.map((m, i) =>
+                i === injIdx
+                    ? { ...m, content: applyGlossaryToPrompt(m.content ?? '', glossaryEntries) }
+                    : m
+            );
+        }
+    }
 
     promptList = promptList.map((item) => {
         return {

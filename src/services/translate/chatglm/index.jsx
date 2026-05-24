@@ -1,6 +1,7 @@
 import { Language } from './info';
 import * as jose from 'jose';
 import { info } from 'tauri-plugin-log-api';
+import { applyGlossaryToPrompt } from '../../../utils/glossary';
 
 export async function translate(text, from, to, options = {}) {
     const { config, setResult, detect } = options;
@@ -11,6 +12,21 @@ export async function translate(text, from, to, options = {}) {
     if (id === undefined || secret === undefined) {
         return Promise.reject('invalid apikey');
     }
+
+    // Glossary injection (Phase 1) — runs before variable substitution.
+    const glossaryEntries = options.glossaryEntries ?? [];
+    if (glossaryEntries.length > 0) {
+        let injIdx = promptList.findIndex((m) => m.role === 'system');
+        if (injIdx === -1) injIdx = promptList.findIndex((m) => m.role === 'user');
+        if (injIdx !== -1) {
+            promptList = promptList.map((m, i) =>
+                i === injIdx
+                    ? { ...m, content: applyGlossaryToPrompt(m.content ?? '', glossaryEntries) }
+                    : m
+            );
+        }
+    }
+
     promptList = promptList.map((item) => {
         return {
             ...item,

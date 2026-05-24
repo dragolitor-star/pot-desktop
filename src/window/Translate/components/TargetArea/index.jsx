@@ -38,6 +38,7 @@ import { sourceTextAtom, detectLanguageAtom } from '../SourceArea';
 import { invoke_plugin } from '../../../../utils/invoke_plugin';
 import * as builtinServices from '../../../../services/translate';
 import * as builtinTtsServices from '../../../../services/tts';
+import { fetchActiveGlossary, applyGlossaryPostTranslate, BUILTIN_LLM_ENGINES } from '../../../../utils/glossary';
 
 import { info, error as logError } from 'tauri-plugin-log-api';
 import {
@@ -178,6 +179,10 @@ export default function TargetArea(props) {
                 const instanceConfig = serviceInstanceConfigMap[currentTranslateServiceInstanceKey];
                 instanceConfig['enable'] = 'true';
                 const setHideOnce = invokeOnce(setHide);
+                // TODO(phase-X): glossary support for .potext plugins. Phase 1 wires
+                // built-in engines only (directive #5); plugins bypass glossary today.
+                // Decide whether plugins fetch via a `utils.fetchGlossary` helper or
+                // we apply post-translate to plugin output at this dispatcher.
                 let [func, utils] = await invoke_plugin('translate', translateServiceName);
                 func(sourceText.trim(), pluginInfo.language[sourceLanguage], pluginInfo.language[newTargetLanguage], {
                     config: instanceConfig,
@@ -251,10 +256,15 @@ export default function TargetArea(props) {
                 setHide(true);
                 const instanceConfig = serviceInstanceConfigMap[currentTranslateServiceInstanceKey];
                 const setHideOnce = invokeOnce(setHide);
+                // Phase 1 glossary: fetch once, hand to the engine via options.
+                // Classical engines get post-translate applied in .then() below.
+                const _glossarySrc = sourceLanguage === 'auto' ? detectLanguage : sourceLanguage;
+                const _glossaryEntries = await fetchActiveGlossary(_glossarySrc, newTargetLanguage, null);
                 builtinServices[translateServiceName]
                     .translate(sourceText.trim(), LanguageEnum[sourceLanguage], LanguageEnum[newTargetLanguage], {
                         config: instanceConfig,
                         detect: detectLanguage,
+                        glossaryEntries: _glossaryEntries,
                         setResult: (v) => {
                             if (translateID[index] !== id) return;
                             setResult(v);
@@ -263,6 +273,11 @@ export default function TargetArea(props) {
                     })
                     .then(
                         (v) => {
+                            // Post-translate glossary substitution for classical engines
+                            // (LLM engines baked the glossary into their prompt already).
+                            if (typeof v === 'string' && !BUILTIN_LLM_ENGINES.includes(translateServiceName)) {
+                                v = applyGlossaryPostTranslate(v, _glossaryEntries);
+                            }
                             info(`[${currentTranslateServiceInstanceKey}]resolve:` + v);
                             if (translateID[index] !== id) return;
                             setResult(typeof v === 'string' ? v.trim() : v);
@@ -694,6 +709,7 @@ export default function TargetArea(props) {
                                                     serviceInstanceConfigMap[currentTranslateServiceInstanceKey];
                                                 instanceConfig['enable'] = 'true';
                                                 const setHideOnce = invokeOnce(setHide);
+                                                // TODO(phase-X): glossary support for .potext plugins (see directive #5).
                                                 let [func, utils] = await invoke_plugin(
                                                     'translate',
                                                     getServiceName(currentTranslateServiceInstanceKey)
@@ -744,7 +760,14 @@ export default function TargetArea(props) {
                                                 const instanceConfig =
                                                     serviceInstanceConfigMap[currentTranslateServiceInstanceKey];
                                                 const setHideOnce = invokeOnce(setHide);
-                                                builtinServices[getServiceName(currentTranslateServiceInstanceKey)]
+                                                // Phase 1 glossary (manual re-translate path).
+                                                const _serviceName2 = getServiceName(currentTranslateServiceInstanceKey);
+                                                const _glossaryEntries2 = await fetchActiveGlossary(
+                                                    newSourceLanguage,
+                                                    newTargetLanguage,
+                                                    null
+                                                );
+                                                builtinServices[_serviceName2]
                                                     .translate(
                                                         result.trim(),
                                                         LanguageEnum[newSourceLanguage],
@@ -752,6 +775,7 @@ export default function TargetArea(props) {
                                                         {
                                                             config: instanceConfig,
                                                             detect: newSourceLanguage,
+                                                            glossaryEntries: _glossaryEntries2,
                                                             setResult: (v) => {
                                                                 setResult(v);
                                                                 setHideOnce(false);
@@ -760,6 +784,12 @@ export default function TargetArea(props) {
                                                     )
                                                     .then(
                                                         (v) => {
+                                                            if (
+                                                                typeof v === 'string' &&
+                                                                !BUILTIN_LLM_ENGINES.includes(_serviceName2)
+                                                            ) {
+                                                                v = applyGlossaryPostTranslate(v, _glossaryEntries2);
+                                                            }
                                                             if (v === result) {
                                                                 setResult(v + ' ');
                                                             } else {

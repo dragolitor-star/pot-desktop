@@ -1,6 +1,7 @@
 import { fetch, Body } from '@tauri-apps/api/http';
 import { Language } from './info';
 import { GEMINI_MODEL_PRESETS, GEMINI_DEFAULT_PRESET, GEMINI_API_BASE } from './Config';
+import { applyGlossaryToPrompt } from '../../../utils/glossary';
 
 const KNOWN_LEGACY_MODEL_SEGMENTS = [
     'gemini-pro',
@@ -57,6 +58,22 @@ export async function translate(text, from, to, options = {}) {
     const { config, setResult, detect } = options;
     const { apiKey, stream } = config;
     let { promptList } = config;
+
+    // Glossary injection (Phase 1) — runs before variable substitution so
+    // $text/$from/$to in the original prompt remain intact for the next pass.
+    // Gemini's prompt shape is { role, parts: [{ text }] }; inject into the
+    // first user message (Gemini uses user/model role pairs, no system role).
+    const glossaryEntries = options.glossaryEntries ?? [];
+    if (glossaryEntries.length > 0) {
+        const injIdx = promptList.findIndex((m) => m.role === 'user');
+        if (injIdx !== -1) {
+            promptList = promptList.map((m, i) =>
+                i === injIdx
+                    ? { ...m, parts: [{ text: applyGlossaryToPrompt(m.parts[0].text, glossaryEntries) }] }
+                    : m
+            );
+        }
+    }
 
     const { model, base } = resolveModelAndBase(config);
     const url = stream
