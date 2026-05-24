@@ -34,9 +34,9 @@ fn download_pdfium(_app_dir: &Path, lib_name: &str, lib_path: &Path) -> Result<(
     let arch = std::env::consts::ARCH;
 
     let asset_name = match (os, arch) {
-        ("windows", "x86") => "pdfium-win-x86.zip",
-        ("windows", "x86_64") => "pdfium-win-x64.zip",
-        ("windows", "aarch64") => "pdfium-win-arm64.zip",
+        ("windows", "x86") => "pdfium-win-x86.tgz",
+        ("windows", "x86_64") => "pdfium-win-x64.tgz",
+        ("windows", "aarch64") => "pdfium-win-arm64.tgz",
         ("macos", "x86_64") => "pdfium-mac-x64.tgz",
         ("macos", "aarch64") => "pdfium-mac-arm64.tgz",
         ("linux", "x86") => "pdfium-linux-x86.tgz",
