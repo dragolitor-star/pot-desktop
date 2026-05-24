@@ -15,7 +15,13 @@
                 "caiyun": {},
                 "baidu_field": {},
                 "cambridge_dict": {},
-                "geminipro": {},
+                "geminipro": {
+                    "model": "Model",
+                    "custom_model": "Özel model",
+                    "custom_model_label": "Özel model adı",
+                    "preview_tooltip": "API önceden haber verilmeden değişebilir.",
+                    "model_upgraded": "Gemini modeliniz {{model}} sürümüne yükseltildi."
+                },
                 "openai_custom": {},
                 "baidu": {},
                 "niutrans": {},

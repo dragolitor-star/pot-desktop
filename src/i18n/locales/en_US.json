@@ -279,6 +279,11 @@
                     "request_path": "Request Path",
                     "api_key": "Api Key",
                     "stream": "Stream Mode",
+                    "model": "Model",
+                    "custom_model": "Custom model",
+                    "custom_model_label": "Custom model name",
+                    "preview_tooltip": "API may change without notice.",
+                    "model_upgraded": "Your Gemini model was upgraded to {{model}}.",
                     "prompt_description": "By customizing the Prompt, you can customize the behavior of Gemini Pro. $text $from $to $detect will be replaced with the text to be translated, source language, target language and detected language.",
                     "add": "Add Prompt"
                 },
