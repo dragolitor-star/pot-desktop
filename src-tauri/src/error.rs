@@ -27,6 +27,8 @@ pub enum Error {
     Selection(#[from] font_kit::error::SelectionError),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Rusqlite(#[from] rusqlite::Error),
 }
 
 // we must manually implement serde::Serialize

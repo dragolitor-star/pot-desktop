@@ -6,6 +6,7 @@ mod clipboard;
 mod cmd;
 mod config;
 mod error;
+mod glossary;
 mod hotkey;
 mod lang_detect;
 mod screenshot;
@@ -19,6 +20,7 @@ use backup::*;
 use clipboard::*;
 use cmd::*;
 use config::*;
+use glossary::*;
 use hotkey::*;
 use lang_detect::*;
 use log::info;
@@ -83,6 +85,8 @@ fn main() {
             // Init Config
             info!("Init Config Store");
             init_config(app);
+            // Init Glossary DB (Phase 1)
+            init_glossary_db(app);
             // Check First Run
             if is_first_run() {
                 // Open Config Window
@@ -152,7 +156,8 @@ fn main() {
             local,
             install_plugin,
             font_list,
-            aliyun
+            aliyun,
+            get_active_glossary
         ])
         .on_system_tray_event(tray_event_handler)
         .build(tauri::generate_context!())
