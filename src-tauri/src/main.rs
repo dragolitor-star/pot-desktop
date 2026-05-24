@@ -157,7 +157,11 @@ fn main() {
             install_plugin,
             font_list,
             aliyun,
-            get_active_glossary
+            get_active_glossary,
+            add_glossary_entry,
+            update_glossary_entry,
+            delete_glossary_entry,
+            list_glossaries
         ])
         .on_system_tray_event(tray_event_handler)
         .build(tauri::generate_context!())
