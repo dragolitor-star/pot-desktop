@@ -165,7 +165,7 @@ Phase 9 just needs: rebrand strings, swap pubkey/secrets, drop pot-docs trigger,
 | **9 — Distribution** | Replace pot-app secrets, regen Tauri updater keypair, host `update.json` on the new GitHub Releases. Drop trademark-bound steps (Homebrew tap `pot-app/homebrew-tap`, Winget `Pylogmon.pot`). Add `SECURITY.md`, fresh `CHANGELOG.md`, `distribution/README-for-users.{en,tr}.md`. Code-sign Windows via `WINDOWS_CERT_PFX_BASE64`/`WINDOWS_CERT_PASSWORD`. |
 
 ## 16. Quirks, debts, and watch-outs
-1. **Gemini engine is outdated.** Default `requestPath` is `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro` — `gemini-pro` is a deprecated model name. Per project brief: use `gemini-2.5-flash` for translation, `gemini-2.5-pro` for long-context. Update default in `src/services/translate/geminipro/Config.jsx:23` and verify model name is current at implementation time. The streaming SSE parser uses brittle regex `/{ \"text\": \".*\" } ],/` — consider replacing with proper SSE chunk parser when touched.
+1. **Gemini engine** — was on the deprecated `gemini-pro` ID with a brittle regex SSE parser. **Fixed in commit `75740c0`** (Phase 1 prep): default bumped to `gemini-3.5-flash` (Stable GA, current gen), preset selector + custom-model toggle + legacy auto-migration toast added, SSE parser replaced with a proper `?alt=sse` chunked reader. API IDs verified against `https://ai.google.dev/gemini-api/docs/models` on 2026-05-24. See §20 for the as-built shape.
 2. **Identifier collision risk.** `bundle.identifier = com.pot-app.desktop` — must change in Phase 8 to avoid clashing with installed Pot.
 3. **HTTP server is permissive.** Binds only to `127.0.0.1` but **no auth** — any local process can trigger translation/screenshot. Acceptable for desktop tool; document in `SECURITY.md`.
 4. **`run_binary` security.** `Command::new("cmd").args(["/c", &cmd_name])` on Windows — `cmd_name` comes from plugin config. Plugin trust model is "you installed it, you trust it." Note in SECURITY.md.
@@ -174,6 +174,9 @@ Phase 9 just needs: rebrand strings, swap pubkey/secrets, drop pot-docs trigger,
 7. **Typo:** `server.rs:20` notification ID is `"com.pot-spp.com"` (should be `"com.pot-app.com"`). Bug, but isolated to one notification.
 8. **Daemon window** is a workaround for `available_monitors()` needing a window handle — keep it through Tauri 2 migration unless the new API lifts that constraint.
 9. **`tauri_plugin_single_instance` disabled — decision: keep disabled for release.** The init call at `src-tauri/src/main.rs:46-53` is commented out. **Root cause:** `plugins-workspace` v1 branch (commit `fa8ee1d`) introduced a Windows null-pointer dereference under newer Rust UB checks; single-instance is a nice-to-have (prevents double-launch), not worth the crash risk for end users. The comment-out + a `// TODO` referencing the upstream fix commit are now committed (no longer a "dev tweak"). Revisit when (a) plugins-workspace v1 ships a fix, or (b) we hit Tauri 2 in Phase 7 (this plugin is rewritten there, making the issue moot).
+10. **PDFium native lib download** — `src-tauri/src/document/pdf.rs` fetches the PDFium shared library from `bblanchon/pdfium-binaries` chromium/7843 on first use. Asset naming changed: `.tgz` on Windows (was `.zip` prior to chromium/7843), `.tgz` on macOS/Linux. Extraction via pure-Rust `flate2` + `tar` so no system unzip dependency. Upstream periodically deletes old release tags — when chromium/7843 disappears the first launch will 404; bump the tag string in `pdf.rs`.
+11. **Glossary scope hardcoded to `'document'` in PDF flow.** `src/window/Document/index.jsx:165` passes `scope='document'` to `fetchActiveGlossary`, which filters in entries with scope=NULL or scope='document' but filters OUT entries with other scopes (e.g. 'tech'). Per directive #4, scope should boost priority, not exclude. Decide in Phase 2 closure: drop the scope arg and rely on the ORDER BY priority alone, OR keep filter semantics with a UI control to override.
+12. **Document translation loop runs in frontend JS, not Rust.** Phase 2 brief wanted Rust background thread + Tauri progress events; the current `src/window/Document/index.jsx` runs the page-by-page loop in the renderer with `setProgressText`/`setProgressPercent`. Works for typical docs (≤30 pages) but blocks the renderer on very long inputs and can't survive a webview reload. Tech debt — schedule a Phase 2 finalization commit that moves the loop to a Rust thread + `app_handle.emit_all("document_progress", ...)` channel.
 
 ## 17. Phase 0 verification status
 
@@ -197,3 +200,64 @@ Phase 9 just needs: rebrand strings, swap pubkey/secrets, drop pot-docs trigger,
 - **New Config pages** = new route in `src/window/Config/routes/index.jsx` + new page folder in `pages/` + new sidebar entry in `components/SideBar`.
 - **New i18n keys** land in `en_US.json` (source) + `tr_TR.json` (Turkish, our default fork audience).
 - **New crates** > 10 MB compiled size require explicit approval per project rules.
+
+## 19. As-built phase status (updated 2026-05-24)
+
+| Phase | Status | Key commits | Notes |
+|---|---|---|---|
+| 0 — Discovery | ✓ Done | `9c712f7`, `7213953` | This doc + `single_instance` disabled. |
+| 1 — Glossary | ✓ Done | `75740c0`, `c3d3fc7`, `edf9f92`, `b970cdf`, `7e2b9e0`, `1112b33`, `ebaf2eb`, `11a398c` | See §20 for as-built shape. |
+| 2 — PDF | 🔄 In progress | `561174a`, `baa5df4`, `f5b8537`, `3aa5fc6`, `dab2672`, `424e288` | See §21. PDF output assembly + code-block skip heuristic + Rust-thread migration + paragraph-grouping tests + context-menu integration still pending. |
+
+## 20. Phase 1 — Glossary (as built)
+
+**Database** — `$APPCONFIG/<bundleId>/glossary.db` via `rusqlite 0.31` (`bundled` feature). Tables `glossaries` + `schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`. Index `(active, source_lang, target_lang)`.
+
+**Rust** (`src-tauri/src/glossary.rs`)
+- `init_glossary_db(app)` — startup hook, fail-soft on error so the rest of the app stays usable.
+- `get_active_glossary(source_lang, target_lang, scope?)` — directive #4 priority order encoded in SQL `ORDER BY` case expressions.
+- CRUD commands: `add_glossary_entry`, `update_glossary_entry`, `delete_glossary_entry`, `list_glossaries(filter?)`.
+- `query_active_glossary(&conn, ...)` pure helper extracted for in-memory unit tests.
+
+**Frontend helpers** (`src/utils/glossary.js`)
+- `fetchActiveGlossary(src, tgt, scope?)` — fail-soft invoke wrapper around the Rust command.
+- `applyGlossaryToPrompt(promptText, entries)` — JSON map block prepended to an LLM prompt; first-seen wins per duplicate source_term.
+- `applyGlossaryPostTranslate(text, entries)` — Unicode-aware word-boundary substitutions (`\p{L}\p{N}_`); honors per-entry `case_sensitive`.
+- `BUILTIN_LLM_ENGINES = ['geminipro','openai','chatglm','ollama']`.
+
+**Engine wiring**
+- LLM engines (4) read `options.glossaryEntries` and inject `applyGlossaryToPrompt` into the first system message (Gemini: first user — no system role). Runs BEFORE the `$text/$from/$to` substitution loop so template vars stay intact.
+- Classical engines (~17) wrapped at the TargetArea dispatcher — its return value passes through `applyGlossaryPostTranslate` when the engine name isn't in `BUILTIN_LLM_ENGINES`. Saves 17 mechanical per-engine edits.
+- `.potext` plugin engines NOT wired (directive #5). TODO comments live at both plugin call sites in `TargetArea/index.jsx`.
+
+**Config UI** — `src/window/Config/pages/Glossary/` with NextUI Table + search + language-pair filter + scope filter + active-only toggle + Add/Edit/Delete modals + JSON/CSV import-export. Sidebar entry + i18n keys in `en_US.json` + `tr_TR.json` (other locales flow through Weblate).
+
+**Tests** — Rust in-memory DB tests (migration idempotency, resolution priority, scope filter, `active=false` skip, CRUD roundtrip) + frontend Vitest tests for the pure helpers in `src/utils/glossary.js`.
+
+**User docs** — `docs/glossary.md` covers directive #4 priority rules, directive #5 `.potext` limitation, JSON/CSV import format examples, debug recipes.
+
+## 21. Phase 2 — PDF document translation (in progress)
+
+**Frontend** (`src/window/Document/index.jsx`)
+- Drag-drop + file picker for `.pdf`.
+- Per-page paragraph extraction display + bilingual split-screen viewer.
+- **Translation Mode** select (commit `424e288`):
+  - *Page by Page (Recommended)* — joins paragraphs with `[PARAGRAPH]` boundary tokens for a single API call per page (~90% request reduction vs paragraph-by-paragraph). Alignment fallbacks: token miss → `\n\n` split → mismatch-distribution-into-last-paragraph (no translated text is silently dropped).
+  - *Paragraph by Paragraph* — legacy linear loop.
+- Exponential backoff retry (3 attempts, 1s → 2s → 4s) for transient HTTP 429 / network blips.
+- 150 ms proactive delay between calls to stay under provider rate limits.
+- Glossary integration: `fetchActiveGlossary(src, tgt, 'document')` — see §16.11 caveat.
+- Exports: Markdown + HTML, with red-italic styling on failed cells in the HTML output.
+- Cancel button via `cancelRef`.
+
+**Rust** (`src-tauri/src/document/`)
+- `pdf.rs` — uses `pdfium-render`. PDFium native library auto-downloaded on first use from `bblanchon/pdfium-binaries` chromium/7843 (see §16.10).
+  - Cross-platform `.tgz` extraction via `flate2` + `tar` (pure-Rust, no system unzip).
+- Tauri commands `extract_pdf_pages(path)` and `render_pdf_page(path, page_no)` registered in `main.rs::invoke_handler!`.
+
+**Known gaps vs. the Phase 2 brief** (next-step candidates)
+- **PDF output assembly** — brief mandates three output modes (Bilingual PDF / Side-by-side PDF / Translated-only PDF). Currently only Markdown + HTML exports are wired.
+- **Code-block / formula skip heuristic** — font CMMI/CMSY/STIX + symbol-density detection not implemented; code listings get retranslated.
+- **Rust-thread translation loop** — currently runs in renderer (see §16.12). Migrate to a Rust thread with Tauri `emit_all` progress events.
+- **Paragraph grouping unit tests** (Rust side).
+- **Right-click context menu integration** (Windows shell + Linux `.desktop`) — fold into Phase 9 distribution scope.
