@@ -46,9 +46,9 @@ fn download_pdfium(_app_dir: &Path, lib_name: &str, lib_path: &Path) -> Result<(
         _ => return Err(format!("Unsupported platform/architecture: {}-{}", os, arch)),
     };
 
-    // Pinned stable release version (chromium/6499)
+    // Pinned stable release version (chromium/7843)
     let url = format!(
-        "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F6499/{}",
+        "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7843/{}",
         asset_name
     );
 
