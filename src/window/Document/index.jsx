@@ -366,80 +366,79 @@ export default function Document() {
                         return copy;
                     });
 
-                    // Build the joined input. Single-page batch uses the legacy
-                    // [PARAGRAPH]-only format (so its cache key matches old-style runs);
-                    // multi-page batches additionally interleave [PAGE n] markers
-                    // between pages so the output can be split back per page.
-                    let joinedText;
-                    if (batchPages.length === 1) {
-                        joinedText = batchPages[0].paragraphs.map(p => p.original).join('\n\n[PARAGRAPH]\n\n');
-                    } else {
-                        const parts = [];
-                        for (let bp = 0; bp < batchPages.length; bp++) {
-                            if (bp > 0) parts.push(`\n\n[PAGE ${bp + 1}]\n\n`);
-                            parts.push(batchPages[bp].paragraphs.map(p => p.original).join('\n\n[PARAGRAPH]\n\n'));
-                        }
-                        joinedText = parts.join('');
+                    // FLAT join: every paragraph in the batch joined ONLY by [PARAGRAPH].
+                    // We DON'T use [PAGE n] markers because LLMs cheerfully translate them
+                    // ("[SAYFA 2]" in Turkish, "[页面 2]" in Chinese, "[SEITE 2]" in German,
+                    // "[ページ 2]" in Japanese …) and the page-split regex stops matching,
+                    // dumping the whole batch into the first page. Page boundaries are
+                    // reconstructed below from the known per-page paragraph count —
+                    // deterministic, language-agnostic, marker-free.
+                    const allParas = [];
+                    const pageBoundaries = []; // per-page paragraph count, in batch order
+                    for (const _p of batchPages) {
+                        pageBoundaries.push(_p.paragraphs.length);
+                        for (const _para of _p.paragraphs) allParas.push(_para.original);
                     }
+                    const expectedCount = allParas.length;
+                    const joinedText = allParas.join('\n\n[PARAGRAPH]\n\n');
 
                     try {
                         const translatedText = await translateWithCacheAndRetry(joinedText, startStateIdx, -1);
 
-                        // Step 1: split the translated chunk back into pages.
-                        let pageTexts;
-                        if (batchPages.length === 1) {
-                            pageTexts = [translatedText];
-                        } else {
-                            const segments = translatedText.split(/\s*\[PAGE\s+\d+\]\s*/i)
-                                .map(s => s.trim())
-                                .filter(s => s.length > 0);
-                            if (segments.length === batchPages.length) {
-                                pageTexts = segments;
-                            } else if (segments.length < batchPages.length) {
-                                // Model dropped some page markers — pad missing tail with empties.
-                                pageTexts = [...segments, ...new Array(batchPages.length - segments.length).fill('')];
-                            } else {
-                                // Extra segments — merge overflow into the last page.
-                                pageTexts = [
-                                    ...segments.slice(0, batchPages.length - 1),
-                                    segments.slice(batchPages.length - 1).join('\n\n'),
-                                ];
+                        // Primary split: the [PARAGRAPH] marker. Fall back to a \n\n
+                        // split when the marker count doesn't match (LLMs sometimes
+                        // drop the markers entirely and rely on double newlines).
+                        let flatParas = translatedText.split(/\s*\[PARAGRAPH\]\s*/i).map(p => p.trim()).filter(p => p.length > 0);
+                        if (flatParas.length !== expectedCount) {
+                            const newlineParas = translatedText.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+                            if (newlineParas.length === expectedCount) {
+                                flatParas = newlineParas;
                             }
                         }
 
-                        // Step 2: per page, distribute paragraphs via [PARAGRAPH] split
-                        // with the existing single-page fallbacks (\n\n split, then
-                        // mismatch-distribution-into-last-paragraph).
+                        // Greedy distribution: each page takes its expected number of
+                        // paragraphs from the flat array (capped by what's still
+                        // available). The LAST page in the batch absorbs any overflow.
+                        // Pages that run short fall back to the per-page mismatch logic
+                        // (first slice.length-1 1:1, merge the rest into the last
+                        // paragraph) so no translated content ever disappears.
+                        let cursor = 0;
                         for (let bp = 0; bp < batchPages.length; bp++) {
                             const stateIdx = startStateIdx + bp;
-                            const page = batchPages[bp];
-                            const pageText = pageTexts[bp] || '';
-
-                            let translatedParas = pageText.split(/\s*\[PARAGRAPH\]\s*/i).map(p => p.trim()).filter(p => p.length > 0);
-
-                            if (translatedParas.length !== page.paragraphs.length) {
-                                const newlineParas = pageText.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
-                                if (newlineParas.length === page.paragraphs.length) {
-                                    translatedParas = newlineParas;
-                                }
+                            const expectedPageCount = pageBoundaries[bp];
+                            let takeCount;
+                            if (bp === batchPages.length - 1) {
+                                takeCount = Math.max(0, flatParas.length - cursor);
+                            } else {
+                                takeCount = Math.min(expectedPageCount, Math.max(0, flatParas.length - cursor));
                             }
+                            const slice = flatParas.slice(cursor, cursor + takeCount);
+                            cursor += takeCount;
 
                             setPages(prev => {
                                 const copy = [...prev];
-                                if (translatedParas.length === page.paragraphs.length) {
-                                    for (let i = 0; i < page.paragraphs.length; i++) {
-                                        copy[stateIdx].paragraphs[i].translated = translatedParas[i];
+                                if (slice.length === expectedPageCount) {
+                                    // Exact alignment for this page
+                                    for (let i = 0; i < expectedPageCount; i++) {
+                                        copy[stateIdx].paragraphs[i].translated = slice[i];
                                         copy[stateIdx].paragraphs[i].translating = false;
                                         copy[stateIdx].paragraphs[i].error = undefined;
                                     }
+                                } else if (slice.length === 0) {
+                                    // Nothing reached this page — flag every paragraph as mismatch
+                                    for (let i = 0; i < expectedPageCount; i++) {
+                                        copy[stateIdx].paragraphs[i].translated = '';
+                                        copy[stateIdx].paragraphs[i].translating = false;
+                                        copy[stateIdx].paragraphs[i].error = 'Paragraph mismatch during page translation layout mapping.';
+                                    }
                                 } else {
-                                    // Mismatch distribution fallback
-                                    for (let i = 0; i < page.paragraphs.length; i++) {
-                                        if (i < translatedParas.length - 1) {
-                                            copy[stateIdx].paragraphs[i].translated = translatedParas[i];
+                                    // Per-page mismatch fallback (existing semantics)
+                                    for (let i = 0; i < expectedPageCount; i++) {
+                                        if (i < slice.length - 1 && i < expectedPageCount - 1) {
+                                            copy[stateIdx].paragraphs[i].translated = slice[i];
                                             copy[stateIdx].paragraphs[i].error = undefined;
-                                        } else if (i === page.paragraphs.length - 1 && translatedParas.length > 0) {
-                                            copy[stateIdx].paragraphs[i].translated = translatedParas.slice(i).join('\n\n');
+                                        } else if (i === expectedPageCount - 1) {
+                                            copy[stateIdx].paragraphs[i].translated = slice.slice(i).join('\n\n');
                                             copy[stateIdx].paragraphs[i].error = undefined;
                                         } else {
                                             copy[stateIdx].paragraphs[i].translated = '';
