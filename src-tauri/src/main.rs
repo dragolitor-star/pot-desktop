@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backup;
+mod cache;
 mod clipboard;
 mod cmd;
 mod config;
@@ -18,6 +19,7 @@ mod updater;
 mod window;
 
 use backup::*;
+use cache::*;
 use clipboard::*;
 use cmd::*;
 use config::*;
@@ -90,6 +92,8 @@ fn main() {
             init_config(app);
             // Init Glossary DB (Phase 1)
             init_glossary_db(app);
+            // Init translation cache DB (Phase 2 optimization)
+            init_cache_db(app);
             // Check First Run
             if is_first_run() {
                 // Open Config Window
@@ -167,7 +171,11 @@ fn main() {
             list_glossaries,
             extract_pdf_pages,
             render_pdf_page,
-            document_window
+            document_window,
+            cache_get_translation,
+            cache_set_translation,
+            cache_stats,
+            cache_clear
         ])
         .on_system_tray_event(tray_event_handler)
         .build(tauri::generate_context!())
