@@ -176,6 +176,9 @@
                 "label": "History",
                 "title": "History"
             },
+            "document": {
+                "label": "Document Translation"
+            },
             "glossary": {
                 "label": "Glossary",
                 "title": "Glossary Settings",

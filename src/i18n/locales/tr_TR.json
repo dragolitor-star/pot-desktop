@@ -84,6 +84,9 @@
             "service": {},
             "about": {},
             "history": {},
+            "document": {
+                "label": "Belge Çevirisi"
+            },
             "glossary": {
                 "label": "Sözlük",
                 "title": "Sözlük Ayarları",

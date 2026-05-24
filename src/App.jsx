@@ -12,6 +12,7 @@ import Recognize from './window/Recognize';
 import Updater from './window/Updater';
 import { store } from './utils/store';
 import Config from './window/Config';
+import Document from './window/Document';
 import { useConfig } from './hooks';
 import './style.css';
 import './i18n';
@@ -22,6 +23,7 @@ const windowMap = {
     recognize: <Recognize />,
     config: <Config />,
     updater: <Updater />,
+    document: <Document />,
 };
 
 export default function App() {

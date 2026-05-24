@@ -6,10 +6,12 @@ import { useTranslation } from 'react-i18next';
 import { PiTextboxFill } from 'react-icons/pi';
 import { MdKeyboardAlt } from 'react-icons/md';
 import { MdMenuBook } from 'react-icons/md';
+import { MdInsertDriveFile } from 'react-icons/md';
 import { MdExtension } from 'react-icons/md';
 import { AiFillCloud } from 'react-icons/ai';
 import { FaHistory } from 'react-icons/fa';
 import { Button } from '@nextui-org/react';
+import { invoke } from '@tauri-apps/api/tauri';
 import React from 'react';
 
 export default function SideBar() {
@@ -106,6 +108,18 @@ export default function SideBar() {
                 startContent={<MdMenuBook className='text-[24px]' />}
             >
                 <div className='w-full'>{t('config.glossary.label')}</div>
+            </Button>
+            <Button
+                fullWidth
+                size='lg'
+                variant='light'
+                className='mb-[5px]'
+                onPress={() => {
+                    invoke('document_window');
+                }}
+                startContent={<MdInsertDriveFile className='text-[24px]' />}
+            >
+                <div className='w-full'>{t('config.document.label')}</div>
             </Button>
             <Button
                 fullWidth

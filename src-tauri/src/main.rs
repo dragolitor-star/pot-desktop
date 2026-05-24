@@ -5,6 +5,7 @@ mod backup;
 mod clipboard;
 mod cmd;
 mod config;
+mod document;
 mod error;
 mod glossary;
 mod hotkey;
@@ -20,6 +21,7 @@ use backup::*;
 use clipboard::*;
 use cmd::*;
 use config::*;
+use document::pdf::*;
 use glossary::*;
 use hotkey::*;
 use lang_detect::*;
@@ -36,6 +38,7 @@ use tray::*;
 use updater::check_update;
 use window::config_window;
 use window::updater_window;
+use window::document_window;
 
 // Global AppHandle
 pub static APP: OnceCell<tauri::AppHandle> = OnceCell::new();
@@ -161,7 +164,10 @@ fn main() {
             add_glossary_entry,
             update_glossary_entry,
             delete_glossary_entry,
-            list_glossaries
+            list_glossaries,
+            extract_pdf_pages,
+            render_pdf_page,
+            document_window
         ])
         .on_system_tray_event(tray_event_handler)
         .build(tauri::generate_context!())

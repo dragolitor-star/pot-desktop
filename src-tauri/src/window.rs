@@ -409,3 +409,13 @@ pub fn updater_window() {
     window.set_size(tauri::LogicalSize::new(600, 400)).unwrap();
     window.center().unwrap();
 }
+
+#[tauri::command(async)]
+pub fn document_window() {
+    let (window, _exists) = build_window("document", "Document");
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(800, 600)))
+        .unwrap();
+    window.set_size(tauri::LogicalSize::new(1000, 750)).unwrap();
+    window.center().unwrap();
+}
