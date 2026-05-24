@@ -5,6 +5,7 @@ import Recognize from '../pages/Recognize';
 import General from '../pages/General';
 import Service from '../pages/Service';
 import History from '../pages/History';
+import Glossary from '../pages/Glossary';
 import Hotkey from '../pages/Hotkey';
 import Backup from '../pages/Backup';
 import About from '../pages/About';
@@ -33,6 +34,10 @@ const routes = [
     {
         path: '/history',
         element: <History />,
+    },
+    {
+        path: '/glossary',
+        element: <Glossary />,
     },
     {
         path: '/backup',

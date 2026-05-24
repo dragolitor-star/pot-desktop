@@ -5,6 +5,7 @@ import { AiFillAppstore } from 'react-icons/ai';
 import { useTranslation } from 'react-i18next';
 import { PiTextboxFill } from 'react-icons/pi';
 import { MdKeyboardAlt } from 'react-icons/md';
+import { MdMenuBook } from 'react-icons/md';
 import { MdExtension } from 'react-icons/md';
 import { AiFillCloud } from 'react-icons/ai';
 import { FaHistory } from 'react-icons/fa';
@@ -93,6 +94,18 @@ export default function SideBar() {
                 startContent={<FaHistory className='text-[24px]' />}
             >
                 <div className='w-full'>{t('config.history.label')}</div>
+            </Button>
+            <Button
+                fullWidth
+                size='lg'
+                variant={setStyle('/glossary')}
+                className='mb-[5px]'
+                onPress={() => {
+                    navigate('/glossary');
+                }}
+                startContent={<MdMenuBook className='text-[24px]' />}
+            >
+                <div className='w-full'>{t('config.glossary.label')}</div>
             </Button>
             <Button
                 fullWidth
