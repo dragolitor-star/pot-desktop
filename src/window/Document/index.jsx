@@ -58,6 +58,7 @@ export default function Document() {
     const [sourceLang, setSourceLang] = useState('auto');
     const [targetLang, setTargetLang] = useState('tr');
     const [selectedEngine, setSelectedEngine] = useState('');
+    const [translationMode, setTranslationMode] = useState('page'); // 'page' | 'paragraph'
 
     const cancelRef = useRef(false);
 
@@ -166,29 +167,24 @@ export default function Document() {
             let totalParagraphs = mappedPages.reduce((acc, p) => acc + p.paragraphs.length, 0);
             let translatedCount = 0;
 
-            for (let pageIdx = 0; pageIdx < mappedPages.length; pageIdx++) {
-                if (cancelRef.current) break;
+            const translateParagraphWithRetry = async (text, pageIdx, paraIdx) => {
+                const maxRetries = 3;
+                let attempt = 0;
+                let delay = 1000;
 
-                const page = mappedPages[pageIdx];
-                for (let paraIdx = 0; paraIdx < page.paragraphs.length; paraIdx++) {
-                    if (cancelRef.current) break;
+                // Add a small baseline proactive delay to avoid hitting rate limits
+                await new Promise(resolve => setTimeout(resolve, 150));
 
-                    setProgressText(`Translating Page ${page.index} / ${mappedPages.length}...`);
-
-                    // Update translating state
-                    setPages(prev => {
-                        const copy = [...prev];
-                        copy[pageIdx].paragraphs[paraIdx].translating = true;
-                        return copy;
-                    });
-
-                    const paragraphText = page.paragraphs[paraIdx].original;
+                while (attempt <= maxRetries) {
+                    if (cancelRef.current) {
+                        throw new Error('cancelled');
+                    }
 
                     try {
                         let finalResult = '';
-                        await new Promise((resolve, reject) => {
+                        const resText = await new Promise((resolve, reject) => {
                             builtinServices[engineName].translate(
-                                paragraphText,
+                                text,
                                 LanguageEnum[sourceLang],
                                 LanguageEnum[targetLang],
                                 {
@@ -206,26 +202,146 @@ export default function Document() {
                                 }
                                 resolve(val);
                             }).catch(reject);
-                        }).then((translatedText) => {
-                            setPages(prev => {
-                                const copy = [...prev];
-                                copy[pageIdx].paragraphs[paraIdx].translated = String(translatedText);
-                                copy[pageIdx].paragraphs[paraIdx].translating = false;
-                                return copy;
-                            });
+                        });
+
+                        return resText;
+                    } catch (err) {
+                        attempt++;
+                        if (attempt > maxRetries || cancelRef.current) {
+                            throw err;
+                        }
+                        
+                        // Update progress UI status to let the user know we are retrying
+                        if (paraIdx === -1) {
+                            setProgressText(`Retrying Page ${pageIdx + 1}... Attempt ${attempt}/${maxRetries} in ${(delay / 1000).toFixed(1)}s`);
+                        } else {
+                            setProgressText(`Retrying Page ${pageIdx + 1} para ${paraIdx + 1}... Attempt ${attempt}/${maxRetries} in ${(delay / 1000).toFixed(1)}s`);
+                        }
+                        
+                        // Wait with exponential backoff before the next attempt
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        delay *= 2; // double the delay
+                    }
+                }
+            };
+
+            if (translationMode === 'page') {
+                for (let pageIdx = 0; pageIdx < mappedPages.length; pageIdx++) {
+                    if (cancelRef.current) break;
+
+                    const page = mappedPages[pageIdx];
+                    setProgressText(`Translating Page ${page.index} / ${mappedPages.length}...`);
+
+                    // Update translating state for all paragraphs on this page
+                    setPages(prev => {
+                        const copy = [...prev];
+                        for (let i = 0; i < copy[pageIdx].paragraphs.length; i++) {
+                            copy[pageIdx].paragraphs[i].translating = true;
+                        }
+                        return copy;
+                    });
+
+                    // Join all paragraphs with a unique separator
+                    const joinedText = page.paragraphs.map(p => p.original).join('\n\n[PARAGRAPH]\n\n');
+
+                    try {
+                        const translatedText = await translateParagraphWithRetry(joinedText, pageIdx, -1);
+                        
+                        let translatedParas = translatedText.split(/\s*\[PARAGRAPH\]\s*/i).map(p => p.trim()).filter(p => p.length > 0);
+                        
+                        // Fallback to double newlines if the separator was translated or dropped
+                        if (translatedParas.length !== page.paragraphs.length) {
+                            const newlineParas = translatedText.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+                            if (newlineParas.length === page.paragraphs.length) {
+                                translatedParas = newlineParas;
+                            }
+                        }
+
+                        setPages(prev => {
+                            const copy = [...prev];
+                            if (translatedParas.length === page.paragraphs.length) {
+                                for (let i = 0; i < page.paragraphs.length; i++) {
+                                    copy[pageIdx].paragraphs[i].translated = translatedParas[i];
+                                    copy[pageIdx].paragraphs[i].translating = false;
+                                    copy[pageIdx].paragraphs[i].error = undefined;
+                                }
+                            } else {
+                                // Mismatch distribution fallback
+                                for (let i = 0; i < page.paragraphs.length; i++) {
+                                    if (i < translatedParas.length - 1) {
+                                        copy[pageIdx].paragraphs[i].translated = translatedParas[i];
+                                        copy[pageIdx].paragraphs[i].error = undefined;
+                                    } else if (i === page.paragraphs.length - 1) {
+                                        copy[pageIdx].paragraphs[i].translated = translatedParas.slice(i).join('\n\n');
+                                        copy[pageIdx].paragraphs[i].error = undefined;
+                                    } else {
+                                        copy[pageIdx].paragraphs[i].translated = '';
+                                        copy[pageIdx].paragraphs[i].error = 'Paragraph mismatch during page translation layout mapping.';
+                                    }
+                                    copy[pageIdx].paragraphs[i].translating = false;
+                                }
+                            }
+                            return copy;
                         });
                     } catch (err) {
                         setPages(prev => {
                             const copy = [...prev];
-                            copy[pageIdx].paragraphs[paraIdx].error = String(err);
-                            copy[pageIdx].paragraphs[paraIdx].translating = false;
+                            for (let i = 0; i < copy[pageIdx].paragraphs.length; i++) {
+                                copy[pageIdx].paragraphs[i].error = String(err);
+                                copy[pageIdx].paragraphs[i].translating = false;
+                            }
                             return copy;
                         });
                     }
 
-                    translatedCount++;
+                    translatedCount += page.paragraphs.length;
                     const percent = Math.min(40 + Math.floor((translatedCount / totalParagraphs) * 60), 100);
                     setProgressPercent(percent);
+                }
+            } else {
+                for (let pageIdx = 0; pageIdx < mappedPages.length; pageIdx++) {
+                    if (cancelRef.current) break;
+
+                    const page = mappedPages[pageIdx];
+                    for (let paraIdx = 0; paraIdx < page.paragraphs.length; paraIdx++) {
+                        if (cancelRef.current) break;
+
+                        setProgressText(`Translating Page ${page.index} / ${mappedPages.length}...`);
+
+                        // Update translating state
+                        setPages(prev => {
+                            const copy = [...prev];
+                            copy[pageIdx].paragraphs[paraIdx].translating = true;
+                            return copy;
+                        });
+
+                        const paragraphText = page.paragraphs[paraIdx].original;
+
+                        try {
+                            const translatedText = await translateParagraphWithRetry(paragraphText, pageIdx, paraIdx);
+                            setPages(prev => {
+                                const copy = [...prev];
+                                copy[pageIdx].paragraphs[paraIdx].translated = String(translatedText);
+                                copy[pageIdx].paragraphs[paraIdx].translating = false;
+                                copy[pageIdx].paragraphs[paraIdx].error = undefined; // Clear error on success
+                                return copy;
+                            });
+                        } catch (err) {
+                            if (String(err) === 'Error: cancelled') {
+                                break;
+                            }
+                            setPages(prev => {
+                                const copy = [...prev];
+                                copy[pageIdx].paragraphs[paraIdx].error = String(err);
+                                copy[pageIdx].paragraphs[paraIdx].translating = false;
+                                return copy;
+                            });
+                        }
+
+                        translatedCount++;
+                        const percent = Math.min(40 + Math.floor((translatedCount / totalParagraphs) * 60), 100);
+                        setProgressPercent(percent);
+                    }
                 }
             }
 
@@ -267,7 +383,11 @@ export default function Document() {
                 markdown += `## Page ${page.index}\n\n`;
                 for (const para of page.paragraphs) {
                     markdown += `**Original:**\n${para.original}\n\n`;
-                    markdown += `**Translation:**\n${para.translated || '*[Not Translated]*'}\n\n`;
+                    let translationText = para.translated;
+                    if (!translationText) {
+                        translationText = para.error ? `*[Translation Error: ${para.error}]*` : '*[Not Translated]*';
+                    }
+                    markdown += `**Translation:**\n${translationText}\n\n`;
                     markdown += `---\n\n`;
                 }
             }
@@ -313,7 +433,21 @@ export default function Document() {
                 for (const para of page.paragraphs) {
                     htmlContent += `    <div class="grid-row">\n`;
                     htmlContent += `      <div class="source">${para.original.replace(/\n/g, '<br>')}</div>\n`;
-                    htmlContent += `      <div class="target">${(para.translated || '').replace(/\n/g, '<br>')}</div>\n`;
+                    let translationText = para.translated;
+                    let isError = false;
+                    if (!translationText) {
+                        if (para.error) {
+                            translationText = `[Translation Error: ${para.error}]`;
+                            isError = true;
+                        } else {
+                            translationText = '*[Not Translated]*';
+                        }
+                    }
+                    if (isError) {
+                        htmlContent += `      <div class="target" style="color: #ea3838; font-style: italic;">${translationText.replace(/\n/g, '<br>')}</div>\n`;
+                    } else {
+                        htmlContent += `      <div class="target">${translationText.replace(/\n/g, '<br>')}</div>\n`;
+                    }
                     htmlContent += `    </div>\n`;
                 }
                 htmlContent += `  </div>\n`;
@@ -417,6 +551,21 @@ export default function Document() {
                                             {e}
                                         </SelectItem>
                                     ))}
+                                </Select>
+                                <Select
+                                    label="Translation Mode"
+                                    size="sm"
+                                    variant="bordered"
+                                    selectedKeys={[translationMode]}
+                                    onSelectionChange={(keys) => setTranslationMode([...keys][0])}
+                                    className="max-w-[180px]"
+                                >
+                                    <SelectItem key="page" value="page">
+                                        Page by Page (Recommended)
+                                    </SelectItem>
+                                    <SelectItem key="paragraph" value="paragraph">
+                                        Paragraph by Paragraph
+                                    </SelectItem>
                                 </Select>
                                 <Button color="primary" className="h-[40px] px-8" onPress={handleStartTranslation} startContent={<MdTranslate />}>
                                     Translate
