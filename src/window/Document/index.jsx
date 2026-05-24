@@ -12,6 +12,7 @@ import { appWindow } from '@tauri-apps/api/window';
 
 
 import { useToastStyle, useConfig } from '../../hooks';
+import { store } from '../../utils/store';
 import * as builtinServices from '../../services/translate';
 import { fetchActiveGlossary, applyGlossaryPostTranslate, BUILTIN_LLM_ENGINES } from '../../utils/glossary';
 import { getServiceName, whetherPluginService } from '../../utils/service_instance';
@@ -115,6 +116,7 @@ export default function Document() {
         setProgressText('Verifying and initializing PDFium dynamic library...');
 
         try {
+            const instanceConfig = (await store.get(selectedEngine)) ?? {};
             // Step 1: Extract Pages
             setStatus('extracting');
             setProgressPercent(25);
@@ -190,7 +192,7 @@ export default function Document() {
                                 LanguageEnum[sourceLang],
                                 LanguageEnum[targetLang],
                                 {
-                                    config: {}, // empty context config
+                                    config: instanceConfig,
                                     detect: sourceLang === 'auto' ? 'en' : sourceLang,
                                     glossaryEntries: _glossaryEntries,
                                     setResult: (v) => {
