@@ -106,6 +106,12 @@ export async function translate(text, from, to, options = {}) {
             { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
             { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
         ],
+        // Raise the output ceiling so large document-translation batches don't get
+        // truncated mid-response (the default cap is much lower). It's only a ceiling,
+        // so short selection/input translations are unaffected. All Gemini 3.x Flash
+        // models support this; a custom legacy model that rejects it can be pointed
+        // at a lower value via a future config field.
+        generationConfig: { maxOutputTokens: 32768 },
     };
 
     if (stream) {

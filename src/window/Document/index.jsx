@@ -163,7 +163,7 @@ export default function Document() {
     const [targetLang, setTargetLang] = useState('tr');
     const [selectedEngine, setSelectedEngine] = useState('');
     const [translationMode, setTranslationMode] = useState('page'); // 'page' | 'paragraph'
-    const [charsPerRequest, setCharsPerRequest] = useState(6000); // source-char budget per API call (safe vs output-token truncation)
+    const [charsPerRequest, setCharsPerRequest] = useState(15000); // source-char budget per API call (paired with Gemini maxOutputTokens=32768)
     const [rpmLimit, setRpmLimit] = useState(10); // requests/min ceiling (Gemini free-tier safe default)
     const [cacheHits, setCacheHits] = useState(0);
 
@@ -420,7 +420,7 @@ export default function Document() {
                 // Also cap by a hard paragraph count: many short units (e.g. a
                 // table-of-contents page) would otherwise stuff dozens of markers into
                 // one call and raise alignment-drift risk.
-                const MAX_PARAS_PER_BATCH = 25;
+                const MAX_PARAS_PER_BATCH = 50;
                 const batches = [];
                 let cur = [];
                 let curChars = 0;
@@ -920,7 +920,7 @@ export default function Document() {
                                         Paragraph by Paragraph
                                     </SelectItem>
                                 </Select>
-                                <Tooltip content="Source characters packed into one API call. Higher = fewer requests but more output-truncation risk. ~6000 is the safe default for Gemini Flash's output limit; unique paragraphs are de-duplicated + cached so repeats cost nothing, and numbered markers keep alignment robust.">
+                                <Tooltip content="Source characters packed into one API call. Higher = fewer requests (less quota burn) but bigger responses. Default 15000 is paired with Gemini's raised 32768-token output cap; unique paragraphs are de-duplicated + cached so repeats cost nothing, and numbered markers keep alignment robust (a truncated tail only fails its own segments, which a re-run retries from cache).">
                                     <Input
                                         label="Chars / request"
                                         size="sm"
@@ -930,7 +930,7 @@ export default function Document() {
                                         max={40000}
                                         step={1000}
                                         value={String(charsPerRequest)}
-                                        onValueChange={(v) => setCharsPerRequest(Math.max(1000, Math.min(40000, parseInt(v, 10) || 6000)))}
+                                        onValueChange={(v) => setCharsPerRequest(Math.max(1000, Math.min(40000, parseInt(v, 10) || 15000)))}
                                         isDisabled={translationMode !== 'page'}
                                         className="max-w-[130px]"
                                     />
