@@ -163,7 +163,7 @@ export default function Document() {
     const [targetLang, setTargetLang] = useState('tr');
     const [selectedEngine, setSelectedEngine] = useState('');
     const [translationMode, setTranslationMode] = useState('page'); // 'page' | 'paragraph'
-    const [charsPerRequest, setCharsPerRequest] = useState(15000); // source-char budget per API call (paired with Gemini maxOutputTokens=32768)
+    const [charsPerRequest, setCharsPerRequest] = useState(6000); // source-char budget per API call (safe default for weaker models like flash-lite; raise it on flash)
     const [rpmLimit, setRpmLimit] = useState(10); // requests/min ceiling (Gemini free-tier safe default)
     const [cacheHits, setCacheHits] = useState(0);
 
@@ -420,7 +420,7 @@ export default function Document() {
                 // Also cap by a hard paragraph count: many short units (e.g. a
                 // table-of-contents page) would otherwise stuff dozens of markers into
                 // one call and raise alignment-drift risk.
-                const MAX_PARAS_PER_BATCH = 50;
+                const MAX_PARAS_PER_BATCH = 25;
                 const batches = [];
                 let cur = [];
                 let curChars = 0;
@@ -799,10 +799,12 @@ export default function Document() {
             doc.write(printHtml);
             doc.close();
 
-            // Give the webview a tick to lay out before printing, then clean up
-            // after the dialog closes (afterprint) with a timeout safety net.
-            iframe.contentWindow.addEventListener('afterprint', () => setTimeout(cleanup, 200));
-            setTimeout(() => {
+            iframe.contentWindow.addEventListener('afterprint', () => setTimeout(cleanup, 500));
+
+            let triggered = false;
+            const printWhenReady = () => {
+                if (triggered) return;
+                triggered = true;
                 try {
                     iframe.contentWindow.focus();
                     iframe.contentWindow.print();
@@ -811,11 +813,20 @@ export default function Document() {
                     toast.error('Print failed: ' + String(err), { style: toastStyle });
                     return;
                 }
-                // Safety net in case afterprint never fires
-                setTimeout(cleanup, 60000);
-            }, 350);
+                // Safety net in case afterprint never fires.
+                setTimeout(cleanup, 120000);
+            };
 
-            toast.success('Opening print dialog — choose "Save as PDF" as the destination.');
+            // A big document must FULLY lay out before we print, otherwise the print
+            // engine captures a blank/partial page and produces a corrupt PDF that
+            // "won't open". Wait for the iframe load event, and also use a fallback
+            // delay scaled to the page count (doc.write doesn't always fire onload in
+            // every webview). Whichever fires first wins (guarded by `triggered`).
+            iframe.onload = () => setTimeout(printWhenReady, 600);
+            const settleMs = Math.min(12000, 1500 + pages.length * 140);
+            setTimeout(printWhenReady, settleMs);
+
+            toast.success(`Preparing ${pages.length}-page PDF… the print dialog will open shortly — choose "Save as PDF" / "Microsoft Print to PDF" as the destination.`, { duration: 8000 });
         } catch (e) {
             toast.error(String(e), { style: toastStyle });
         }
@@ -920,7 +931,7 @@ export default function Document() {
                                         Paragraph by Paragraph
                                     </SelectItem>
                                 </Select>
-                                <Tooltip content="Source characters packed into one API call. Higher = fewer requests (less quota burn) but bigger responses. Default 15000 is paired with Gemini's raised 32768-token output cap; unique paragraphs are de-duplicated + cached so repeats cost nothing, and numbered markers keep alignment robust (a truncated tail only fails its own segments, which a re-run retries from cache).">
+                                <Tooltip content="Source characters packed into one API call. Higher = fewer requests but the model must hold more numbered segments straight at once. Weaker models (e.g. gemini-3.1-flash-lite) start mis-aligning or echoing the source above ~6000; stronger models (gemini-3.5-flash) handle 12000-15000 fine. Unique paragraphs are de-duplicated + cached, so a re-run only retries what failed.">
                                     <Input
                                         label="Chars / request"
                                         size="sm"
@@ -930,7 +941,7 @@ export default function Document() {
                                         max={40000}
                                         step={1000}
                                         value={String(charsPerRequest)}
-                                        onValueChange={(v) => setCharsPerRequest(Math.max(1000, Math.min(40000, parseInt(v, 10) || 15000)))}
+                                        onValueChange={(v) => setCharsPerRequest(Math.max(1000, Math.min(40000, parseInt(v, 10) || 6000)))}
                                         isDisabled={translationMode !== 'page'}
                                         className="max-w-[130px]"
                                     />
