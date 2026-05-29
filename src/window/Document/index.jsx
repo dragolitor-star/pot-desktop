@@ -135,7 +135,7 @@ export default function Document() {
     const [targetLang, setTargetLang] = useState('tr');
     const [selectedEngine, setSelectedEngine] = useState('');
     const [translationMode, setTranslationMode] = useState('page'); // 'page' | 'paragraph'
-    const [pageBatchSize, setPageBatchSize] = useState(5); // pages per API call when translationMode='page'
+    const [charsPerRequest, setCharsPerRequest] = useState(12000); // source-char budget per API call in batched mode
     const [rpmLimit, setRpmLimit] = useState(10); // requests/min ceiling (Gemini free-tier safe default)
     const [cacheHits, setCacheHits] = useState(0);
 
@@ -334,140 +334,147 @@ export default function Document() {
             };
 
             if (translationMode === 'page') {
-                const batchSize = Math.max(1, pageBatchSize | 0);
-                // Group pages into chunks of `batchSize` — each chunk becomes ONE API
-                // call. batchSize=1 reproduces the legacy page-by-page behavior; larger
-                // values cut total request count (5 pages/batch → 5x fewer requests).
-                const batches = [];
-                for (let i = 0; i < mappedPages.length; i += batchSize) {
-                    batches.push({ pages: mappedPages.slice(i, i + batchSize), startStateIdx: i });
+                const charBudget = Math.max(1000, charsPerRequest | 0);
+
+                // Flatten every paragraph into a unit that remembers its location.
+                const units = []; // { pageIdx, paraIdx, text }
+                for (let pi = 0; pi < mappedPages.length; pi++) {
+                    const pg = mappedPages[pi];
+                    for (let pj = 0; pj < pg.paragraphs.length; pj++) {
+                        units.push({ pageIdx: pi, paraIdx: pj, text: pg.paragraphs[pj].original });
+                    }
                 }
 
+                // DEDUP — manuals repeat the same header / footer / page-number on
+                // every page. Translate each UNIQUE source paragraph ONCE, then fan the
+                // result out to all its locations. translationByText maps sourceText →
+                // result; sentinels: null = pending, string = done, '__MISMATCH__' and
+                // '__ERROR__:<msg>' flag failures.
+                const translationByText = new Map();
+                const uniqueTexts = [];
+                for (const u of units) {
+                    if (u.text.trim().length === 0) {
+                        translationByText.set(u.text, '');
+                        continue;
+                    }
+                    if (!translationByText.has(u.text)) {
+                        translationByText.set(u.text, null);
+                        uniqueTexts.push(u.text);
+                    }
+                }
+
+                // Mark everything translating up front.
+                setPages(prev => {
+                    const copy = [...prev];
+                    for (const u of units) {
+                        if (u.text.trim().length > 0) copy[u.pageIdx].paragraphs[u.paraIdx].translating = true;
+                    }
+                    return copy;
+                });
+
+                // CACHE — resolve unique texts already known; queue the rest.
+                const needTranslate = [];
+                for (const text of uniqueTexts) {
+                    if (cancelRef.current) break;
+                    const cached = await getCachedTranslation(modelId, sourceLang, targetLang, text);
+                    if (cached !== null && cached !== undefined) {
+                        translationByText.set(text, cached);
+                        localCacheHits++;
+                        setCacheHits(localCacheHits);
+                    } else {
+                        needTranslate.push(text);
+                    }
+                }
+
+                // BATCH by CHARACTER BUDGET (not page count) — pack each request as
+                // full as is safe so the document costs the fewest possible API calls.
+                const batches = [];
+                let cur = [];
+                let curChars = 0;
+                for (const text of needTranslate) {
+                    if (curChars > 0 && curChars + text.length > charBudget) {
+                        batches.push(cur);
+                        cur = [];
+                        curChars = 0;
+                    }
+                    cur.push(text);
+                    curChars += text.length;
+                }
+                if (cur.length > 0) batches.push(cur);
+
+                let doneUnique = uniqueTexts.length - needTranslate.length;
                 for (let bIdx = 0; bIdx < batches.length; bIdx++) {
                     if (cancelRef.current) break;
-                    const { pages: batchPages, startStateIdx } = batches[bIdx];
-                    const firstNum = batchPages[0].index;
-                    const lastNum = batchPages[batchPages.length - 1].index;
-                    const label = batchPages.length === 1
-                        ? `Page ${firstNum} / ${mappedPages.length}`
-                        : `Pages ${firstNum}-${lastNum} / ${mappedPages.length}`;
-                    const hitsTail = localCacheHits > 0 ? ` (cache hits: ${localCacheHits})` : '';
-                    setProgressText(`Translating ${label}${hitsTail}...`);
+                    const batchTexts = batches[bIdx];
+                    const expectedCount = batchTexts.length;
+                    setProgressText(`Batch ${bIdx + 1}/${batches.length} · ${doneUnique}/${uniqueTexts.length} unique paragraphs · ${localCacheHits} cache hits`);
 
-                    // Mark all paragraphs in this batch as translating
-                    setPages(prev => {
-                        const copy = [...prev];
-                        for (let bp = 0; bp < batchPages.length; bp++) {
-                            const stateIdx = startStateIdx + bp;
-                            for (let i = 0; i < copy[stateIdx].paragraphs.length; i++) {
-                                copy[stateIdx].paragraphs[i].translating = true;
-                            }
-                        }
-                        return copy;
-                    });
-
-                    // FLAT join: every paragraph in the batch joined ONLY by [PARAGRAPH].
-                    // We DON'T use [PAGE n] markers because LLMs cheerfully translate them
-                    // ("[SAYFA 2]" in Turkish, "[页面 2]" in Chinese, "[SEITE 2]" in German,
-                    // "[ページ 2]" in Japanese …) and the page-split regex stops matching,
-                    // dumping the whole batch into the first page. Page boundaries are
-                    // reconstructed below from the known per-page paragraph count —
-                    // deterministic, language-agnostic, marker-free.
-                    const allParas = [];
-                    const pageBoundaries = []; // per-page paragraph count, in batch order
-                    for (const _p of batchPages) {
-                        pageBoundaries.push(_p.paragraphs.length);
-                        for (const _para of _p.paragraphs) allParas.push(_para.original);
-                    }
-                    const expectedCount = allParas.length;
-                    const joinedText = allParas.join('\n\n[PARAGRAPH]\n\n');
-
+                    const joinedText = batchTexts.join('\n\n[PARAGRAPH]\n\n');
                     try {
-                        const translatedText = await translateWithCacheAndRetry(joinedText, startStateIdx, -1);
+                        // Per-paragraph caching is done below, so skip the batch-level
+                        // cache wrapper — just pace under the RPM ceiling and retry.
+                        await rpmLimiter.acquire();
+                        const translatedText = await translateParagraphWithRetry(joinedText, 0, -1);
 
-                        // Primary split: the [PARAGRAPH] marker. Fall back to a \n\n
-                        // split when the marker count doesn't match (LLMs sometimes
-                        // drop the markers entirely and rely on double newlines).
                         let flatParas = translatedText.split(/\s*\[PARAGRAPH\]\s*/i).map(p => p.trim()).filter(p => p.length > 0);
                         if (flatParas.length !== expectedCount) {
-                            const newlineParas = translatedText.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
-                            if (newlineParas.length === expectedCount) {
-                                flatParas = newlineParas;
-                            }
+                            const nl = translatedText.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+                            if (nl.length === expectedCount) flatParas = nl;
                         }
 
-                        // Greedy distribution: each page takes its expected number of
-                        // paragraphs from the flat array (capped by what's still
-                        // available). The LAST page in the batch absorbs any overflow.
-                        // Pages that run short fall back to the per-page mismatch logic
-                        // (first slice.length-1 1:1, merge the rest into the last
-                        // paragraph) so no translated content ever disappears.
-                        let cursor = 0;
-                        for (let bp = 0; bp < batchPages.length; bp++) {
-                            const stateIdx = startStateIdx + bp;
-                            const expectedPageCount = pageBoundaries[bp];
-                            let takeCount;
-                            if (bp === batchPages.length - 1) {
-                                takeCount = Math.max(0, flatParas.length - cursor);
+                        for (let i = 0; i < expectedCount; i++) {
+                            const srcText = batchTexts[i];
+                            let trans;
+                            if (flatParas.length === expectedCount) {
+                                trans = flatParas[i];
+                            } else if (i < flatParas.length - 1 && i < expectedCount - 1) {
+                                trans = flatParas[i];
+                            } else if (i === expectedCount - 1 && flatParas.length > 0) {
+                                trans = flatParas.slice(i).join('\n\n');
                             } else {
-                                takeCount = Math.min(expectedPageCount, Math.max(0, flatParas.length - cursor));
+                                trans = null;
                             }
-                            const slice = flatParas.slice(cursor, cursor + takeCount);
-                            cursor += takeCount;
-
-                            setPages(prev => {
-                                const copy = [...prev];
-                                if (slice.length === expectedPageCount) {
-                                    // Exact alignment for this page
-                                    for (let i = 0; i < expectedPageCount; i++) {
-                                        copy[stateIdx].paragraphs[i].translated = slice[i];
-                                        copy[stateIdx].paragraphs[i].translating = false;
-                                        copy[stateIdx].paragraphs[i].error = undefined;
-                                    }
-                                } else if (slice.length === 0) {
-                                    // Nothing reached this page — flag every paragraph as mismatch
-                                    for (let i = 0; i < expectedPageCount; i++) {
-                                        copy[stateIdx].paragraphs[i].translated = '';
-                                        copy[stateIdx].paragraphs[i].translating = false;
-                                        copy[stateIdx].paragraphs[i].error = 'Paragraph mismatch during page translation layout mapping.';
-                                    }
-                                } else {
-                                    // Per-page mismatch fallback (existing semantics)
-                                    for (let i = 0; i < expectedPageCount; i++) {
-                                        if (i < slice.length - 1 && i < expectedPageCount - 1) {
-                                            copy[stateIdx].paragraphs[i].translated = slice[i];
-                                            copy[stateIdx].paragraphs[i].error = undefined;
-                                        } else if (i === expectedPageCount - 1) {
-                                            copy[stateIdx].paragraphs[i].translated = slice.slice(i).join('\n\n');
-                                            copy[stateIdx].paragraphs[i].error = undefined;
-                                        } else {
-                                            copy[stateIdx].paragraphs[i].translated = '';
-                                            copy[stateIdx].paragraphs[i].error = 'Paragraph mismatch during page translation layout mapping.';
-                                        }
-                                        copy[stateIdx].paragraphs[i].translating = false;
-                                    }
-                                }
-                                return copy;
-                            });
+                            if (trans !== null) {
+                                translationByText.set(srcText, trans);
+                                // per-paragraph cache → cross-document + retry reuse
+                                setCachedTranslation(modelId, sourceLang, targetLang, srcText, trans);
+                            } else {
+                                translationByText.set(srcText, '__MISMATCH__');
+                            }
                         }
                     } catch (err) {
-                        setPages(prev => {
-                            const copy = [...prev];
-                            for (let bp = 0; bp < batchPages.length; bp++) {
-                                const stateIdx = startStateIdx + bp;
-                                for (let i = 0; i < copy[stateIdx].paragraphs.length; i++) {
-                                    copy[stateIdx].paragraphs[i].error = String(err);
-                                    copy[stateIdx].paragraphs[i].translating = false;
-                                }
-                            }
-                            return copy;
-                        });
+                        for (const srcText of batchTexts) {
+                            translationByText.set(srcText, '__ERROR__:' + String(err));
+                        }
                     }
 
-                    translatedCount += batchPages.reduce((acc, p) => acc + p.paragraphs.length, 0);
-                    const percent = Math.min(40 + Math.floor((translatedCount / totalParagraphs) * 60), 100);
+                    doneUnique += expectedCount;
+                    const percent = Math.min(40 + Math.floor((doneUnique / Math.max(1, uniqueTexts.length)) * 60), 100);
                     setProgressPercent(percent);
                 }
+
+                // FAN OUT — apply each resolved translation to every location (dups included).
+                setPages(prev => {
+                    const copy = [...prev];
+                    for (const u of units) {
+                        const para = copy[u.pageIdx].paragraphs[u.paraIdx];
+                        para.translating = false;
+                        const t = translationByText.get(u.text);
+                        if (t === null || t === undefined) {
+                            if (!cancelRef.current) para.error = 'Not translated';
+                        } else if (typeof t === 'string' && t.startsWith('__ERROR__:')) {
+                            para.error = t.slice('__ERROR__:'.length);
+                        } else if (t === '__MISMATCH__') {
+                            para.error = 'Paragraph mismatch during batch translation layout mapping.';
+                        } else {
+                            para.translated = t;
+                            para.error = undefined;
+                        }
+                    }
+                    return copy;
+                });
+                translatedCount = totalParagraphs;
+                setProgressPercent(100);
             } else {
                 for (let pageIdx = 0; pageIdx < mappedPages.length; pageIdx++) {
                     if (cancelRef.current) break;
@@ -851,24 +858,25 @@ export default function Document() {
                                     className="max-w-[180px]"
                                 >
                                     <SelectItem key="page" value="page">
-                                        Page by Page (Recommended)
+                                        Batched (Recommended)
                                     </SelectItem>
                                     <SelectItem key="paragraph" value="paragraph">
                                         Paragraph by Paragraph
                                     </SelectItem>
                                 </Select>
-                                <Tooltip content="Pages joined into one API call. Higher = fewer requests but more output-truncation risk.">
+                                <Tooltip content="Source characters packed into one API call. Higher = fewer requests (less quota burn) but more output-truncation risk. ~12000 is a safe sweet spot for Gemini Flash; unique paragraphs are de-duplicated and cached so repeats cost nothing.">
                                     <Input
-                                        label="Pages / batch"
+                                        label="Chars / request"
                                         size="sm"
                                         variant="bordered"
                                         type="number"
-                                        min={1}
-                                        max={20}
-                                        value={String(pageBatchSize)}
-                                        onValueChange={(v) => setPageBatchSize(Math.max(1, Math.min(20, parseInt(v, 10) || 1)))}
+                                        min={1000}
+                                        max={40000}
+                                        step={1000}
+                                        value={String(charsPerRequest)}
+                                        onValueChange={(v) => setCharsPerRequest(Math.max(1000, Math.min(40000, parseInt(v, 10) || 12000)))}
                                         isDisabled={translationMode !== 'page'}
-                                        className="max-w-[110px]"
+                                        className="max-w-[130px]"
                                     />
                                 </Tooltip>
                                 <Tooltip content="Max requests/minute. Gemini free-tier safe = 10. Paid tier: bump up.">
