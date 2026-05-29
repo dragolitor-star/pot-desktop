@@ -282,6 +282,7 @@ export default function Document() {
             const modelId = getEngineModelId(engineName, instanceConfig);
             const rpmLimiter = new RpmLimiter(Math.max(1, rpmLimit | 0));
             let localCacheHits = 0;
+            let rateLimited = false;
             setCacheHits(0);
 
             const translateParagraphWithRetry = async (text, pageIdx, paraIdx) => {
@@ -481,8 +482,18 @@ export default function Document() {
                             }
                         }
                     } catch (err) {
+                        const errStr = String(err);
                         for (const srcText of batchTexts) {
-                            translationByText.set(srcText, '__ERROR__:' + String(err));
+                            translationByText.set(srcText, '__ERROR__:' + errStr);
+                        }
+                        // A 429 means the provider's rate limit / daily quota is hit —
+                        // hammering the remaining batches just piles up identical
+                        // failures and burns more quota. Stop now; paragraphs done so
+                        // far are cached, so a re-run after the limit resets continues
+                        // exactly where we left off.
+                        if (errStr.includes('429') || /too many requests|rate limit|quota|resource exhausted/i.test(errStr)) {
+                            rateLimited = true;
+                            break;
                         }
                     }
 
@@ -563,6 +574,13 @@ export default function Document() {
             if (cancelRef.current) {
                 setStatus('idle');
                 toast.error('Translation cancelled.');
+            } else if (rateLimited) {
+                setStatus('done');
+                setProgressText('Stopped — provider rate limit / daily quota reached.');
+                toast.error(
+                    'Stopped: the provider returned 429 (rate limit / daily quota). Paragraphs translated so far are cached — re-run this document after the limit resets and it will continue from where it left off (cached paragraphs cost no quota).',
+                    { style: toastStyle, duration: 12000 }
+                );
             } else {
                 setStatus('done');
                 setProgressPercent(100);
