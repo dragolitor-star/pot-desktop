@@ -1,5 +1,5 @@
 import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, Progress, Card, CardBody, CardHeader } from '@nextui-org/react';
-import { Button, Input, Select, SelectItem, Switch, Textarea, Tooltip } from '@nextui-org/react';
+import { Button, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Input, Select, SelectItem, Switch, Textarea, Tooltip } from '@nextui-org/react';
 import React, { useState, useEffect, useRef } from 'react';
 import { save, open } from '@tauri-apps/api/dialog';
 import { writeTextFile } from '@tauri-apps/api/fs';
@@ -638,6 +638,111 @@ export default function Document() {
         }
     };
 
+    // Build a print-optimized HTML document for one of the three output modes.
+    // We render to PDF via the webview's own print pipeline (window.print →
+    // "Save as PDF") rather than a native Rust PDF generator, because the
+    // webview renders every script (CJK source, Turkish/accented target, RTL,
+    // …) using system fonts — no font embedding and no >10MB CJK font bundle.
+    const buildPrintHtml = (mode, fileName) => {
+        const esc = (s) => (s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const br = (s) => esc(s).replace(/\n/g, '<br>');
+        const transOf = (para) => {
+            if (para.translated) return { text: para.translated, isError: false };
+            if (para.error) return { text: `[Translation Error: ${para.error}]`, isError: true };
+            return { text: '[Not Translated]', isError: true };
+        };
+
+        const baseCss = `
+          * { box-sizing: border-box; }
+          @page { size: A4; margin: 14mm; }
+          body { font-family: "Segoe UI", -apple-system, Roboto, "Noto Sans", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; line-height: 1.5; color: #1a1a1a; font-size: 11pt; margin: 0; }
+          h1 { font-size: 16pt; text-align: center; margin: 0 0 16px; word-break: break-word; }
+          .page { page-break-after: always; }
+          .page:last-child { page-break-after: auto; }
+          .page-title { font-weight: 600; font-size: 12pt; color: #0b5cad; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin: 18px 0 10px; }
+          .para { page-break-inside: avoid; margin-bottom: 10px; }
+          .orig { color: #444; }
+          .trans { color: #111; }
+          .err { color: #b00020; font-style: italic; }
+        `;
+        let layoutCss;
+        if (mode === 'sidebyside') {
+            layoutCss = `.para { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; border-bottom: 1px solid #eee; padding: 6px 0; }
+              .trans { border-left: 2px solid #0b5cad; padding-left: 10px; }`;
+        } else if (mode === 'bilingual') {
+            layoutCss = `.orig { margin-bottom: 4px; }
+              .trans { border-left: 2px solid #0b5cad; padding-left: 10px; margin-bottom: 8px; }
+              .para { border-bottom: 1px solid #f0f0f0; padding-bottom: 6px; }`;
+        } else {
+            layoutCss = `.trans { margin-bottom: 8px; }`;
+        }
+
+        let body = `<h1>${esc(fileName)}</h1>`;
+        for (const page of pages) {
+            body += `<div class="page"><div class="page-title">Page ${page.index}</div>`;
+            for (const para of page.paragraphs) {
+                const t = transOf(para);
+                if (mode === 'translated') {
+                    body += `<div class="para"><div class="trans ${t.isError ? 'err' : ''}">${br(t.text)}</div></div>`;
+                } else {
+                    body += `<div class="para"><div class="orig">${br(para.original)}</div><div class="trans ${t.isError ? 'err' : ''}">${br(t.text)}</div></div>`;
+                }
+            }
+            body += `</div>`;
+        }
+
+        return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(fileName)}</title><style>${baseCss}${layoutCss}</style></head><body>${body}</body></html>`;
+    };
+
+    // Export to PDF via a hidden iframe + the webview print dialog.
+    // mode: 'bilingual' | 'sidebyside' | 'translated'
+    const handleExportPdf = (mode) => {
+        try {
+            if (pages.length === 0) return;
+            const fileName = filePath.split(/[\\/]/).pop() || 'document';
+            const printHtml = buildPrintHtml(mode, fileName);
+
+            const iframe = document.createElement('iframe');
+            iframe.setAttribute('aria-hidden', 'true');
+            iframe.style.position = 'fixed';
+            iframe.style.right = '0';
+            iframe.style.bottom = '0';
+            iframe.style.width = '0';
+            iframe.style.height = '0';
+            iframe.style.border = '0';
+            document.body.appendChild(iframe);
+
+            const cleanup = () => {
+                if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            };
+
+            const doc = iframe.contentWindow.document;
+            doc.open();
+            doc.write(printHtml);
+            doc.close();
+
+            // Give the webview a tick to lay out before printing, then clean up
+            // after the dialog closes (afterprint) with a timeout safety net.
+            iframe.contentWindow.addEventListener('afterprint', () => setTimeout(cleanup, 200));
+            setTimeout(() => {
+                try {
+                    iframe.contentWindow.focus();
+                    iframe.contentWindow.print();
+                } catch (err) {
+                    cleanup();
+                    toast.error('Print failed: ' + String(err), { style: toastStyle });
+                    return;
+                }
+                // Safety net in case afterprint never fires
+                setTimeout(cleanup, 60000);
+            }, 350);
+
+            toast.success('Opening print dialog — choose "Save as PDF" as the destination.');
+        } catch (e) {
+            toast.error(String(e), { style: toastStyle });
+        }
+    };
+
     return (
         <div className="flex flex-col h-screen w-screen bg-background text-foreground overflow-hidden">
             <Toaster />
@@ -818,6 +923,32 @@ export default function Document() {
                                 <Button size="sm" color="primary" variant="flat" onPress={handleExportHTML} isDisabled={pages.length === 0} startContent={<MdFileDownload />}>
                                     Export HTML
                                 </Button>
+                                <Dropdown>
+                                    <DropdownTrigger>
+                                        <Button
+                                            size="sm"
+                                            color="primary"
+                                            isDisabled={pages.length === 0}
+                                            startContent={<MdFileDownload />}
+                                        >
+                                            Save as PDF
+                                        </Button>
+                                    </DropdownTrigger>
+                                    <DropdownMenu
+                                        aria-label="PDF export mode"
+                                        onAction={(key) => handleExportPdf(String(key))}
+                                    >
+                                        <DropdownItem key="bilingual" description="Original then translation, stacked">
+                                            Bilingual (stacked)
+                                        </DropdownItem>
+                                        <DropdownItem key="sidebyside" description="Original left, translation right">
+                                            Side-by-side
+                                        </DropdownItem>
+                                        <DropdownItem key="translated" description="Translation only">
+                                            Translated only
+                                        </DropdownItem>
+                                    </DropdownMenu>
+                                </Dropdown>
                             </div>
                         </div>
 
