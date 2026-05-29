@@ -150,6 +150,180 @@ export async function translate(text, from, to, options = {}) {
     }
 }
 
+// Shared safety settings (mirror the per-engine translate() call so structured
+// document batches aren't blocked by overzealous filters on benign source text).
+const GEMINI_SAFETY_SETTINGS = [
+    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+];
+
+// Decide the thinkingConfig for a given model. Only Gemini 2.5+/3.x are thinking
+// models; older models would reject/ignore the field, so we omit it for them.
+// Flash / Flash-Lite can fully disable thinking (budget 0); Pro cannot go below 128.
+function thinkingConfigFor(model) {
+    const m = (model || '').toLowerCase();
+    const isThinkingModel = /gemini-(2\.5|3)/.test(m);
+    if (!isThinkingModel) return undefined;
+    if (m.includes('pro')) return { thinkingBudget: 128 };
+    return { thinkingBudget: 0 };
+}
+
+/**
+ * Structured-output batch translation for document mode (HANDOFF §8 #1).
+ *
+ * Instead of joining paragraphs with fragile `@@n@@` markers and parsing them
+ * back out of free text, we ask Gemini for schema-constrained JSON: an array of
+ * `{ id, translation }`. Because the schema FORCES a `translation` field per id,
+ * this eliminates the two weak-model failure modes the marker approach suffered:
+ *   1. marker drift / dropped markers → whole-batch "Paragraph mismatch", and
+ *   2. the model echoing the (e.g. Chinese) SOURCE instead of translating.
+ * It also lets batches be large again on flash-lite (fewer API calls).
+ *
+ * Returns an array aligned to `texts` (length === texts.length). Any id the model
+ * fails to return is left `null`, so the caller can mark just that paragraph for
+ * a cheap re-run while every other paragraph is kept + cached.
+ *
+ * Gemini-only. Non-Gemini engines keep using the numbered-marker fallback.
+ *
+ * @param {string[]} texts — source paragraphs in order
+ * @param {string} from — Gemini language label (e.g. 'English', 'Auto')
+ * @param {string} to — Gemini language label (e.g. 'Turkish')
+ * @param {{ config: object, glossaryEntries?: Array<object> }} options
+ * @returns {Promise<Array<string|null>>}
+ */
+export async function translateBatchStructured(texts, from, to, options = {}) {
+    const { config } = options;
+    const { apiKey } = config;
+    const glossaryEntries = options.glossaryEntries ?? [];
+
+    const { model, base } = resolveModelAndBase(config);
+    // Structured output uses the non-streaming endpoint (we need the whole JSON
+    // document to parse it; there's no value in token streaming here).
+    const url = `${base}${model}:generateContent?key=${apiKey}`;
+
+    const fromLabel = from && from !== 'Auto' ? from : 'the source language';
+    const items = texts.map((t, i) => ({ id: i + 1, source: t }));
+
+    // Instruction only — per Google's guidance we do NOT restate the output
+    // schema in the prompt (responseSchema already constrains it; duplicating it
+    // degrades quality). Glossary mappings are injected via the shared helper.
+    let instruction =
+        `You are a professional translator. Translate the "source" field of every ` +
+        `item in the JSON array below from ${fromLabel} into ${to}. ` +
+        `Return one result per item, keeping the same "id". Translate every item — ` +
+        `never copy the source untranslated and never omit, merge, reorder, or add ` +
+        `items. Preserve numbers, inline punctuation and meaning; output natural, ` +
+        `fluent ${to}. Do not add notes or explanations.`;
+    instruction = applyGlossaryToPrompt(instruction, glossaryEntries);
+
+    const userText = `${instruction}\n\nInput items:\n${JSON.stringify(items)}`;
+
+    const generationConfig = {
+        maxOutputTokens: 32768,
+        responseMimeType: 'application/json',
+        responseSchema: {
+            type: 'ARRAY',
+            items: {
+                type: 'OBJECT',
+                properties: {
+                    id: { type: 'INTEGER' },
+                    translation: { type: 'STRING' },
+                },
+                required: ['id', 'translation'],
+                propertyOrdering: ['id', 'translation'],
+            },
+        },
+    };
+
+    // Gemini 2.5+/3.x Flash models default to *dynamic thinking*, and thinking
+    // tokens are billed against maxOutputTokens. On a dense batch the reasoning can
+    // consume the whole ceiling, truncating the JSON (finishReason=MAX_TOKENS) so the
+    // trailing items come back empty — which showed up as untranslated final pages of
+    // a long document. Translation needs no chain-of-thought, so disable it. (Pro
+    // models can't fully disable thinking — the API floor is 128 — so cap there.)
+    const thinkingConfig = thinkingConfigFor(model);
+    if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+
+    const body = {
+        contents: [{ role: 'user', parts: [{ text: userText }] }],
+        safetySettings: GEMINI_SAFETY_SETTINGS,
+        generationConfig,
+    };
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: Body.json(body),
+    });
+
+    if (!res.ok) {
+        throw `Http Request Error\nHttp Status: ${res.status}\n${JSON.stringify(res.data)}`;
+    }
+    const { candidates } = res.data;
+    if (!candidates || candidates.length === 0) {
+        throw JSON.stringify(res.data);
+    }
+    const cand = candidates[0];
+    const finish = cand?.finishReason;
+    if (finish && finish !== 'STOP' && finish !== 'MAX_TOKENS') {
+        // Safety/recitation block etc. — surface it instead of returning empties.
+        throw `Gemini stopped: finishReason=${finish}`;
+    }
+    const raw = cand?.content?.parts?.[0]?.text;
+    if (!raw) {
+        throw JSON.stringify(candidates);
+    }
+
+    const parsed = parseStructuredArray(raw);
+    const out = new Array(texts.length).fill(null);
+    for (const el of parsed) {
+        const id = parseInt(el?.id, 10);
+        if (!Number.isNaN(id) && id >= 1 && id <= texts.length && typeof el.translation === 'string') {
+            const val = el.translation.trim();
+            if (val.length > 0) out[id - 1] = val;
+        }
+    }
+    return out;
+}
+
+// Parse the model's JSON array. With responseMimeType=application/json the body
+// is normally clean JSON, but stay defensive: a MAX_TOKENS truncation can clip
+// the trailing `]`, so fall back to slicing the outermost array and, if needed,
+// salvaging complete `{...}` objects so a partial batch still yields its done items.
+function parseStructuredArray(raw) {
+    try {
+        const v = JSON.parse(raw);
+        return Array.isArray(v) ? v : [];
+    } catch (_) {
+        // fall through to salvage
+    }
+    const start = raw.indexOf('[');
+    if (start !== -1) {
+        const end = raw.lastIndexOf(']');
+        if (end > start) {
+            try {
+                const v = JSON.parse(raw.slice(start, end + 1));
+                if (Array.isArray(v)) return v;
+            } catch (_) {
+                // fall through to object-by-object salvage
+            }
+        }
+    }
+    const objects = [];
+    const objRe = /\{[^{}]*\}/g;
+    let m;
+    while ((m = objRe.exec(raw)) !== null) {
+        try {
+            objects.push(JSON.parse(m[0]));
+        } catch (_) {
+            // skip a malformed fragment
+        }
+    }
+    return objects;
+}
+
 // Proper SSE chunk reader for Gemini's `streamGenerateContent?alt=sse` endpoint.
 // Each event is "\n\n"-delimited; only lines starting with "data:" carry payload.
 async function readSseStream(res, setResult) {

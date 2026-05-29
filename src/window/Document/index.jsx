@@ -362,6 +362,49 @@ export default function Document() {
                 return result;
             };
 
+            // Gemini supports schema-constrained JSON output (HANDOFF §8 #1). When the
+            // selected engine is Gemini we translate each batch as a structured
+            // { id, translation } array — no fragile @@n@@ markers, so no marker drift
+            // and no source-echo on weak/free-tier models. Every other engine keeps the
+            // numbered-marker path. This is decided once per run.
+            const supportsStructured =
+                engineName === 'geminipro' &&
+                typeof builtinServices.geminipro?.translateBatchStructured === 'function';
+
+            // Retry wrapper for the structured path (mirrors translateParagraphWithRetry's
+            // backoff). 429 / quota errors are NOT retried here — they bubble so the batch
+            // loop stops early and the run resumes from cache after the limit resets.
+            const translateBatchStructuredWithRetry = async (batchTexts) => {
+                const maxRetries = 3;
+                let attempt = 0;
+                let delay = 1000;
+                for (;;) {
+                    if (cancelRef.current) throw new Error('cancelled');
+                    try {
+                        return await builtinServices.geminipro.translateBatchStructured(
+                            batchTexts,
+                            LanguageEnum[sourceLang],
+                            LanguageEnum[targetLang],
+                            {
+                                config: instanceConfig,
+                                detect: sourceLang === 'auto' ? 'en' : sourceLang,
+                                glossaryEntries: _glossaryEntries,
+                            }
+                        );
+                    } catch (err) {
+                        const es = String(err);
+                        if (es.includes('429') || /too many requests|rate limit|quota|resource exhausted/i.test(es)) {
+                            throw err;
+                        }
+                        attempt++;
+                        if (attempt > maxRetries || cancelRef.current) throw err;
+                        setProgressText(`Retrying batch... Attempt ${attempt}/${maxRetries} in ${(delay / 1000).toFixed(1)}s`);
+                        await new Promise((r) => setTimeout(r, delay));
+                        delay *= 2;
+                    }
+                }
+            };
+
             if (translationMode === 'page') {
                 const charBudget = Math.max(1000, charsPerRequest | 0);
 
@@ -440,31 +483,41 @@ export default function Document() {
                     if (cancelRef.current) break;
                     const batchTexts = batches[bIdx];
                     const expectedCount = batchTexts.length;
-                    setProgressText(`Batch ${bIdx + 1}/${batches.length} · ${doneUnique}/${uniqueTexts.length} unique paragraphs · ${localCacheHits} cache hits`);
+                    setProgressText(`Batch ${bIdx + 1}/${batches.length}${supportsStructured ? ' · structured JSON' : ''} · ${doneUnique}/${uniqueTexts.length} unique paragraphs · ${localCacheHits} cache hits`);
 
-                    const joinedText = buildNumberedJoin(batchTexts);
                     try {
                         // Per-paragraph caching is done below, so skip the batch-level
                         // cache wrapper — just pace under the RPM ceiling and retry.
                         await rpmLimiter.acquire();
-                        const translatedText = await translateParagraphWithRetry(joinedText, 0, -1);
 
-                        // Primary: map segments BY NUMBER (robust to dropped/merged
-                        // markers and to a truncated output tail).
-                        let results = parseNumberedSegments(translatedText, expectedCount);
-                        const gotCount = results.filter((r) => r !== null).length;
+                        let results;
+                        if (supportsStructured) {
+                            // Schema-constrained JSON: results come back already aligned by
+                            // id (length === expectedCount, null for any id Gemini dropped).
+                            // No marker parsing / fallbacks needed — the schema guarantees
+                            // a translation field per id.
+                            results = await translateBatchStructuredWithRetry(batchTexts);
+                        } else {
+                            const joinedText = buildNumberedJoin(batchTexts);
+                            const translatedText = await translateParagraphWithRetry(joinedText, 0, -1);
 
-                        // Fallback only if the numbered markers didn't survive at all.
-                        if (gotCount === 0) {
-                            let flat = translatedText.split(/\s*\[PARAGRAPH\]\s*/i).map((p) => p.trim()).filter((p) => p.length > 0);
-                            if (flat.length !== expectedCount) {
-                                const nl = translatedText.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p.length > 0);
-                                if (nl.length === expectedCount) flat = nl;
-                            }
-                            if (flat.length === expectedCount) {
-                                results = flat;
-                            } else if (expectedCount === 1) {
-                                results = [translatedText.trim()];
+                            // Primary: map segments BY NUMBER (robust to dropped/merged
+                            // markers and to a truncated output tail).
+                            results = parseNumberedSegments(translatedText, expectedCount);
+                            const gotCount = results.filter((r) => r !== null).length;
+
+                            // Fallback only if the numbered markers didn't survive at all.
+                            if (gotCount === 0) {
+                                let flat = translatedText.split(/\s*\[PARAGRAPH\]\s*/i).map((p) => p.trim()).filter((p) => p.length > 0);
+                                if (flat.length !== expectedCount) {
+                                    const nl = translatedText.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p.length > 0);
+                                    if (nl.length === expectedCount) flat = nl;
+                                }
+                                if (flat.length === expectedCount) {
+                                    results = flat;
+                                } else if (expectedCount === 1) {
+                                    results = [translatedText.trim()];
+                                }
                             }
                         }
 
