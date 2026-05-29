@@ -93,6 +93,34 @@ class RpmLimiter {
     }
 }
 
+// Numbered-marker join/parse for robust multi-paragraph batching. Markers like
+// @@1@@ survive translation far better than a word marker and let us map results
+// BY NUMBER — a single dropped / merged / translated marker (or a truncated tail)
+// only affects that one segment instead of cascading mismatch through the whole
+// batch the way positional [PARAGRAPH] splitting did.
+function buildNumberedJoin(texts) {
+    return texts.map((t, i) => `@@${i + 1}@@\n${t}`).join('\n\n');
+}
+
+function parseNumberedSegments(translatedText, count) {
+    const re = /@@\s*(\d+)\s*@@/g;
+    const matches = [];
+    let m;
+    while ((m = re.exec(translatedText)) !== null) {
+        matches.push({ num: parseInt(m[1], 10), start: m.index, end: re.lastIndex });
+    }
+    const result = new Array(count).fill(null);
+    for (let k = 0; k < matches.length; k++) {
+        const num = matches[k].num;
+        if (num < 1 || num > count) continue;
+        const segStart = matches[k].end;
+        const segEnd = k + 1 < matches.length ? matches[k + 1].start : translatedText.length;
+        const seg = translatedText.slice(segStart, segEnd).trim();
+        if (seg.length > 0) result[num - 1] = seg;
+    }
+    return result;
+}
+
 const LANG_OPTIONS = [
     { value: 'auto', label: 'Auto Detect' },
     { value: 'en', label: 'English' },
@@ -135,7 +163,7 @@ export default function Document() {
     const [targetLang, setTargetLang] = useState('tr');
     const [selectedEngine, setSelectedEngine] = useState('');
     const [translationMode, setTranslationMode] = useState('page'); // 'page' | 'paragraph'
-    const [charsPerRequest, setCharsPerRequest] = useState(12000); // source-char budget per API call in batched mode
+    const [charsPerRequest, setCharsPerRequest] = useState(6000); // source-char budget per API call (safe vs output-token truncation)
     const [rpmLimit, setRpmLimit] = useState(10); // requests/min ceiling (Gemini free-tier safe default)
     const [cacheHits, setCacheHits] = useState(0);
 
@@ -388,11 +416,15 @@ export default function Document() {
 
                 // BATCH by CHARACTER BUDGET (not page count) — pack each request as
                 // full as is safe so the document costs the fewest possible API calls.
+                // Also cap by a hard paragraph count: many short units (e.g. a
+                // table-of-contents page) would otherwise stuff dozens of markers into
+                // one call and raise alignment-drift risk.
+                const MAX_PARAS_PER_BATCH = 25;
                 const batches = [];
                 let cur = [];
                 let curChars = 0;
                 for (const text of needTranslate) {
-                    if (curChars > 0 && curChars + text.length > charBudget) {
+                    if (cur.length > 0 && (curChars + text.length > charBudget || cur.length >= MAX_PARAS_PER_BATCH)) {
                         batches.push(cur);
                         cur = [];
                         curChars = 0;
@@ -409,36 +441,42 @@ export default function Document() {
                     const expectedCount = batchTexts.length;
                     setProgressText(`Batch ${bIdx + 1}/${batches.length} · ${doneUnique}/${uniqueTexts.length} unique paragraphs · ${localCacheHits} cache hits`);
 
-                    const joinedText = batchTexts.join('\n\n[PARAGRAPH]\n\n');
+                    const joinedText = buildNumberedJoin(batchTexts);
                     try {
                         // Per-paragraph caching is done below, so skip the batch-level
                         // cache wrapper — just pace under the RPM ceiling and retry.
                         await rpmLimiter.acquire();
                         const translatedText = await translateParagraphWithRetry(joinedText, 0, -1);
 
-                        let flatParas = translatedText.split(/\s*\[PARAGRAPH\]\s*/i).map(p => p.trim()).filter(p => p.length > 0);
-                        if (flatParas.length !== expectedCount) {
-                            const nl = translatedText.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
-                            if (nl.length === expectedCount) flatParas = nl;
+                        // Primary: map segments BY NUMBER (robust to dropped/merged
+                        // markers and to a truncated output tail).
+                        let results = parseNumberedSegments(translatedText, expectedCount);
+                        const gotCount = results.filter((r) => r !== null).length;
+
+                        // Fallback only if the numbered markers didn't survive at all.
+                        if (gotCount === 0) {
+                            let flat = translatedText.split(/\s*\[PARAGRAPH\]\s*/i).map((p) => p.trim()).filter((p) => p.length > 0);
+                            if (flat.length !== expectedCount) {
+                                const nl = translatedText.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p.length > 0);
+                                if (nl.length === expectedCount) flat = nl;
+                            }
+                            if (flat.length === expectedCount) {
+                                results = flat;
+                            } else if (expectedCount === 1) {
+                                results = [translatedText.trim()];
+                            }
                         }
 
                         for (let i = 0; i < expectedCount; i++) {
                             const srcText = batchTexts[i];
-                            let trans;
-                            if (flatParas.length === expectedCount) {
-                                trans = flatParas[i];
-                            } else if (i < flatParas.length - 1 && i < expectedCount - 1) {
-                                trans = flatParas[i];
-                            } else if (i === expectedCount - 1 && flatParas.length > 0) {
-                                trans = flatParas.slice(i).join('\n\n');
-                            } else {
-                                trans = null;
-                            }
-                            if (trans !== null) {
+                            const trans = results[i];
+                            if (trans !== null && trans !== undefined && trans.length > 0) {
                                 translationByText.set(srcText, trans);
                                 // per-paragraph cache → cross-document + retry reuse
                                 setCachedTranslation(modelId, sourceLang, targetLang, srcText, trans);
                             } else {
+                                // Only THIS paragraph failed (dropped marker / truncated
+                                // tail). A re-run retries just this one — the rest are cached.
                                 translationByText.set(srcText, '__MISMATCH__');
                             }
                         }
@@ -864,7 +902,7 @@ export default function Document() {
                                         Paragraph by Paragraph
                                     </SelectItem>
                                 </Select>
-                                <Tooltip content="Source characters packed into one API call. Higher = fewer requests (less quota burn) but more output-truncation risk. ~12000 is a safe sweet spot for Gemini Flash; unique paragraphs are de-duplicated and cached so repeats cost nothing.">
+                                <Tooltip content="Source characters packed into one API call. Higher = fewer requests but more output-truncation risk. ~6000 is the safe default for Gemini Flash's output limit; unique paragraphs are de-duplicated + cached so repeats cost nothing, and numbered markers keep alignment robust.">
                                     <Input
                                         label="Chars / request"
                                         size="sm"
@@ -874,7 +912,7 @@ export default function Document() {
                                         max={40000}
                                         step={1000}
                                         value={String(charsPerRequest)}
-                                        onValueChange={(v) => setCharsPerRequest(Math.max(1000, Math.min(40000, parseInt(v, 10) || 12000)))}
+                                        onValueChange={(v) => setCharsPerRequest(Math.max(1000, Math.min(40000, parseInt(v, 10) || 6000)))}
                                         isDisabled={translationMode !== 'page'}
                                         className="max-w-[130px]"
                                     />
