@@ -655,12 +655,16 @@ export default function Document() {
         const baseCss = `
           * { box-sizing: border-box; }
           @page { size: A4; margin: 14mm; }
-          body { font-family: "Segoe UI", -apple-system, Roboto, "Noto Sans", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; line-height: 1.5; color: #1a1a1a; font-size: 11pt; margin: 0; }
-          h1 { font-size: 16pt; text-align: center; margin: 0 0 16px; word-break: break-word; }
-          .page { page-break-after: always; }
-          .page:last-child { page-break-after: auto; }
-          .page-title { font-weight: 600; font-size: 12pt; color: #0b5cad; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin: 18px 0 10px; }
+          html, body { margin: 0; padding: 0; }
+          body { font-family: "Segoe UI", -apple-system, Roboto, "Noto Sans", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; line-height: 1.5; color: #1a1a1a; font-size: 11pt; }
+          h1 { font-size: 16pt; text-align: center; margin: 0 0 16px; word-break: break-word; overflow-wrap: anywhere; }
+          /* Break BETWEEN pages only — never before the first or after the last.
+             (page-break-after:always on every .page is what produced a spurious
+             leading/trailing blank sheet in the bilingual / side-by-side modes.) */
+          .page + .page { page-break-before: always; }
+          .page-title { font-weight: 600; font-size: 12pt; color: #0b5cad; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin: 0 0 10px; }
           .para { page-break-inside: avoid; margin-bottom: 10px; }
+          .orig, .trans { word-break: break-word; overflow-wrap: anywhere; }
           .orig { color: #444; }
           .trans { color: #111; }
           .err { color: #b00020; font-style: italic; }
@@ -677,9 +681,17 @@ export default function Document() {
             layoutCss = `.trans { margin-bottom: 8px; }`;
         }
 
-        let body = `<h1>${esc(fileName)}</h1>`;
+        // H1 lives INSIDE the first .page so there is no stray block before the
+        // first page box (another contributor to the leading blank sheet).
+        let body = '';
+        let firstPage = true;
         for (const page of pages) {
-            body += `<div class="page"><div class="page-title">Page ${page.index}</div>`;
+            body += `<div class="page">`;
+            if (firstPage) {
+                body += `<h1>${esc(fileName)}</h1>`;
+                firstPage = false;
+            }
+            body += `<div class="page-title">Page ${page.index}</div>`;
             for (const para of page.paragraphs) {
                 const t = transOf(para);
                 if (mode === 'translated') {
@@ -704,12 +716,15 @@ export default function Document() {
 
             const iframe = document.createElement('iframe');
             iframe.setAttribute('aria-hidden', 'true');
+            // Off-screen but with a REAL A4-ish viewport (96dpi). A 0x0 iframe makes
+            // the print engine lay out at zero width, which can emit a blank sheet.
             iframe.style.position = 'fixed';
-            iframe.style.right = '0';
-            iframe.style.bottom = '0';
-            iframe.style.width = '0';
-            iframe.style.height = '0';
+            iframe.style.left = '-10000px';
+            iframe.style.top = '0';
+            iframe.style.width = '794px';
+            iframe.style.height = '1123px';
             iframe.style.border = '0';
+            iframe.style.opacity = '0';
             document.body.appendChild(iframe);
 
             const cleanup = () => {
