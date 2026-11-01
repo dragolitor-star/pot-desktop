@@ -2,6 +2,7 @@ import { fetch, Body } from '@tauri-apps/api/http';
 import { Language } from './info';
 import { GEMINI_MODEL_PRESETS, GEMINI_DEFAULT_PRESET, GEMINI_API_BASE } from './Config';
 import { applyGlossaryToPrompt } from '../../../utils/glossary';
+import { hasResidualCjk, hasProtectedTokenLoss, mapTranslationItems, parseStructuredArray } from '../../../utils/translationQuality';
 
 const KNOWN_LEGACY_MODEL_SEGMENTS = [
     'gemini-pro',
@@ -17,7 +18,9 @@ const KNOWN_LEGACY_MODEL_SEGMENTS = [
 
 // Resolves the effective model name and API base URL from the user's serviceConfig.
 // Tolerates legacy configs whose requestPath was the full URL ending in a known model name.
-function resolveModelAndBase(config) {
+// Exported so the Rust background document-translation loop can be handed the same
+// resolved { model, base } the in-renderer path would use.
+export function resolveModelAndBase(config) {
     // Effective model name.
     let model;
     if (config.useCustomModel && config.customModel) {
@@ -166,6 +169,7 @@ function thinkingConfigFor(model) {
     const m = (model || '').toLowerCase();
     const isThinkingModel = /gemini-(2\.5|3)/.test(m);
     if (!isThinkingModel) return undefined;
+    if (/gemini-3/.test(m)) return { thinkingLevel: m.includes('pro') || /gemini-3\.[78]/.test(m) ? 'low' : 'minimal' };
     if (m.includes('pro')) return { thinkingBudget: 128 };
     return { thinkingBudget: 0 };
 }
@@ -201,24 +205,24 @@ export async function translateBatchStructured(texts, from, to, options = {}) {
     const { model, base } = resolveModelAndBase(config);
     // Structured output uses the non-streaming endpoint (we need the whole JSON
     // document to parse it; there's no value in token streaming here).
-    const url = `${base}${model}:generateContent?key=${apiKey}`;
+    const url = `${base}${model}:generateContent`;
 
     const fromLabel = from && from !== 'Auto' ? from : 'the source language';
-    const items = texts.map((t, i) => ({ id: i + 1, source: t }));
+    const items = texts.map((t, i) => ({ id: i + 1, text: t }));
 
     // Instruction only — per Google's guidance we do NOT restate the output
     // schema in the prompt (responseSchema already constrains it; duplicating it
     // degrades quality). Glossary mappings are injected via the shared helper.
     let instruction =
-        `You are a professional translator. Translate the "source" field of every ` +
+        `You are a professional translator. Translate the "text" field of every ` +
         `item in the JSON array below from ${fromLabel} into ${to}. ` +
         `Return one result per item, keeping the same "id". Translate every item — ` +
         `never copy the source untranslated and never omit, merge, reorder, or add ` +
         `items. Preserve numbers, inline punctuation and meaning; output natural, ` +
-        `fluent ${to}. Do not add notes or explanations.`;
+        `fluent ${to}. Never echo source CJK characters for a non-CJK target language. ` +
+        `Preserve technical tokens (clb/fld, prm.txt, laser_data.bin, sts code, helm set 0 1018, ∆a, ∆b, x, y, theta) ` +
+        `exactly in their grammatical place. Never duplicate sentences or invent extra text. Do not add notes or explanations.`;
     instruction = applyGlossaryToPrompt(instruction, glossaryEntries);
-
-    const userText = `${instruction}\n\nInput items:\n${JSON.stringify(items)}`;
 
     const generationConfig = {
         maxOutputTokens: 32768,
@@ -247,14 +251,15 @@ export async function translateBatchStructured(texts, from, to, options = {}) {
     if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
 
     const body = {
-        contents: [{ role: 'user', parts: [{ text: userText }] }],
+        systemInstruction: { parts: [{ text: instruction }] },
+        contents: [{ role: 'user', parts: [{ text: JSON.stringify(items) }] }],
         safetySettings: GEMINI_SAFETY_SETTINGS,
         generationConfig,
     };
 
     const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: Body.json(body),
     });
 
@@ -277,51 +282,17 @@ export async function translateBatchStructured(texts, from, to, options = {}) {
     }
 
     const parsed = parseStructuredArray(raw);
-    const out = new Array(texts.length).fill(null);
-    for (const el of parsed) {
-        const id = parseInt(el?.id, 10);
-        if (!Number.isNaN(id) && id >= 1 && id <= texts.length && typeof el.translation === 'string') {
-            const val = el.translation.trim();
-            if (val.length > 0) out[id - 1] = val;
+    const out = mapTranslationItems(parsed, texts.length);
+    for (let i = 0; i < out.length; i++) {
+        if (out[i] && !hasResidualCjk(out[i], to) && !hasProtectedTokenLoss(texts[i], out[i])) continue;
+        out[i] = null;
+        if (!options.singleItemRetry) {
+            await options.beforeRetry?.();
+            const [retry] = await translateBatchStructured([texts[i]], from, to, { ...options, singleItemRetry: true });
+            if (retry && !hasResidualCjk(retry, to) && !hasProtectedTokenLoss(texts[i], retry)) out[i] = retry;
         }
     }
     return out;
-}
-
-// Parse the model's JSON array. With responseMimeType=application/json the body
-// is normally clean JSON, but stay defensive: a MAX_TOKENS truncation can clip
-// the trailing `]`, so fall back to slicing the outermost array and, if needed,
-// salvaging complete `{...}` objects so a partial batch still yields its done items.
-function parseStructuredArray(raw) {
-    try {
-        const v = JSON.parse(raw);
-        return Array.isArray(v) ? v : [];
-    } catch (_) {
-        // fall through to salvage
-    }
-    const start = raw.indexOf('[');
-    if (start !== -1) {
-        const end = raw.lastIndexOf(']');
-        if (end > start) {
-            try {
-                const v = JSON.parse(raw.slice(start, end + 1));
-                if (Array.isArray(v)) return v;
-            } catch (_) {
-                // fall through to object-by-object salvage
-            }
-        }
-    }
-    const objects = [];
-    const objRe = /\{[^{}]*\}/g;
-    let m;
-    while ((m = objRe.exec(raw)) !== null) {
-        try {
-            objects.push(JSON.parse(m[0]));
-        } catch (_) {
-            // skip a malformed fragment
-        }
-    }
-    return objects;
 }
 
 // Proper SSE chunk reader for Gemini's `streamGenerateContent?alt=sse` endpoint.

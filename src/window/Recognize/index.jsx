@@ -87,6 +87,17 @@ export default function Recognize() {
         setServiceInstanceConfigMap({ ...config });
     };
     useEffect(() => {
+        if (!window.__TT_BROWSER__) return;
+        const refresh = event => {
+            if (event.detail === 'ocr' && Array.isArray(serviceInstanceList)) {
+                void loadServiceInstanceConfigMap();
+                void loadPluginList();
+            }
+        };
+        window.addEventListener('tt:active-view', refresh);
+        return () => window.removeEventListener('tt:active-view', refresh);
+    }, [serviceInstanceList]);
+    useEffect(() => {
         if (serviceInstanceList !== null) {
             loadServiceInstanceConfigMap();
         }

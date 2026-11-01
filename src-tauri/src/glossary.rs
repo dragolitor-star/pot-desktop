@@ -11,7 +11,9 @@
 //
 // Resolution rules for `get_active_glossary` (also documented in docs/glossary.md):
 //   (a) exact source+target lang match wins over wildcard ("*")
-//   (b) domain-scoped match wins over scope=NULL when a scope filter is active
+//   (b) when a scope filter is active it BOOSTS priority, it does NOT exclude:
+//       matching scope > scope=NULL (global) > other scopes — every active
+//       lang-matched row is still returned (directive #4).
 //   (c) ties broken by most-recently-updated
 //   (d) `active = false` rows are skipped entirely
 
@@ -153,10 +155,14 @@ fn query_active_glossary(
         WHERE active = 1
           AND (source_lang = ?1 OR source_lang = '*')
           AND (target_lang = ?2 OR target_lang = '*')
-          AND (?3 IS NULL OR scope IS NULL OR scope = ?3)
         ORDER BY
           (CASE WHEN source_lang = ?1 AND target_lang = ?2 THEN 0 ELSE 1 END),
-          (CASE WHEN ?3 IS NOT NULL AND scope = ?3 THEN 0 ELSE 1 END),
+          (CASE
+             WHEN ?3 IS NULL THEN 0
+             WHEN scope = ?3 THEN 0
+             WHEN scope IS NULL THEN 1
+             ELSE 2
+           END),
           datetime(updated_at) DESC
     ";
 
@@ -347,9 +353,7 @@ fn do_delete_entry(conn: &Connection, id: i64) -> Result<(), String> {
 /// List glossary entries with optional filtering. Returns all columns
 /// including inactive entries (unless `only_active` is set).
 #[tauri::command]
-pub fn list_glossaries(
-    filter: Option<GlossaryListFilter>,
-) -> Result<Vec<GlossaryEntry>, String> {
+pub fn list_glossaries(filter: Option<GlossaryListFilter>) -> Result<Vec<GlossaryEntry>, String> {
     let app = APP.get().ok_or("APP not initialized")?;
     let state = app
         .try_state::<GlossaryDb>()
@@ -400,7 +404,9 @@ fn do_list_glossaries(
                 ));
                 bind_values.push(Box::new(like));
                 #[allow(unused_assignments)]
-                { param_idx += 1; }
+                {
+                    param_idx += 1;
+                }
             }
         }
     }
@@ -524,8 +530,7 @@ mod tests {
     #[test]
     fn add_and_list_roundtrip() {
         let conn = setup_db();
-        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr"))
-            .expect("add");
+        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr")).expect("add");
         assert!(id > 0);
 
         let all = do_list_glossaries(&conn, None).expect("list all");
@@ -554,8 +559,7 @@ mod tests {
     #[test]
     fn update_entry() {
         let conn = setup_db();
-        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr"))
-            .expect("add");
+        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr")).expect("add");
 
         let updated = GlossaryEntryInput {
             source_term: "hello world".into(),
@@ -589,8 +593,7 @@ mod tests {
     #[test]
     fn update_refreshes_updated_at() {
         let conn = setup_db();
-        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr"))
-            .expect("add");
+        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr")).expect("add");
         let _before: String = conn
             .query_row(
                 "SELECT updated_at FROM glossaries WHERE id = ?1",
@@ -614,8 +617,7 @@ mod tests {
             )
             .unwrap();
 
-        do_update_entry(&conn, id, &sample_input("hello", "merhaba2", "en", "tr"))
-            .expect("update");
+        do_update_entry(&conn, id, &sample_input("hello", "merhaba2", "en", "tr")).expect("update");
         let after: String = conn
             .query_row(
                 "SELECT updated_at FROM glossaries WHERE id = ?1",
@@ -624,14 +626,16 @@ mod tests {
             )
             .unwrap();
 
-        assert!(after > past, "updated_at must be refreshed: {after} > {past}");
+        assert!(
+            after > past,
+            "updated_at must be refreshed: {after} > {past}"
+        );
     }
 
     #[test]
     fn delete_entry() {
         let conn = setup_db();
-        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr"))
-            .expect("add");
+        let id = do_add_entry(&conn, &sample_input("hello", "merhaba", "en", "tr")).expect("add");
 
         do_delete_entry(&conn, id).expect("delete");
         let all = do_list_glossaries(&conn, None).expect("list");
@@ -742,6 +746,26 @@ mod tests {
         let result = query_active_glossary(&conn, "en", "tr", Some("tech")).unwrap();
         assert!(!result.is_empty());
         assert_eq!(result[0].target_term, "SCOPED");
+    }
+
+    #[test]
+    fn resolution_scope_boosts_not_excludes() {
+        let conn = setup_db();
+        do_add_entry(&conn, &sample_input("hello", "GLOBAL", "en", "tr")).unwrap();
+
+        let mut other = sample_input("hello", "OTHER", "en", "tr");
+        other.scope = Some("tech".into());
+        do_add_entry(&conn, &other).unwrap();
+
+        let mut scoped = sample_input("hello", "SCOPED", "en", "tr");
+        scoped.scope = Some("document".into());
+        do_add_entry(&conn, &scoped).unwrap();
+
+        let result = query_active_glossary(&conn, "en", "tr", Some("document")).unwrap();
+        // Non-matching scope ('tech') must NOT be filtered out, only ranked lower.
+        assert_eq!(result.len(), 3, "scope must boost priority, not exclude rows");
+        let ranked: Vec<&str> = result.iter().map(|e| e.target_term.as_str()).collect();
+        assert_eq!(ranked, vec!["SCOPED", "GLOBAL", "OTHER"]);
     }
 
     #[test]

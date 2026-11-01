@@ -26,14 +26,19 @@ selection = "1.2.0"
 serde_json = "1.0"
 dirs = "5.0.1"
 once_cell = "1.19.0"
+# Already compiled through existing dependencies; validates literal technical
+# identifiers and numbers in image translations without adding a new crate.
+regex = "1.11.1"
 mouse_position = "0.1.4"
 log = "0.4"
 tiny_http = "0.12.0"
+# Already present in Cargo.lock; used for unguessable local browser session tokens.
+uuid = { version = "1", features = ["v4"] }
 screenshots = "=0.7.2"
 base64 = "0.22"
 arboard = "3.4"
 lingua = { version = "1.6.2", default-features = false, features = ["chinese", "japanese", "english", "korean", "french", "spanish", "german", "russian", "italian", "portuguese", "turkish", "arabic", "vietnamese", "thai", "indonesian", "malay", "hindi", "mongolian", "persian", "nynorsk", "bokmal", "ukrainian"] }
-reqwest = { version = "0.12", features = ["json", "blocking"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "multipart"] }
 reqwest_dav = "=0.1.5"
 zip = "2.2.0"
 walkdir = "2.5"
@@ -44,6 +49,29 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 pdfium-render = "0.8.37"
 flate2 = "1.0"
 tar = "0.4"
+# Native PDF output assembly (Phase 2 #3). default-features off to skip the
+# experimental html/svg layout stack (kuchiki/fontconfig/hyphenation). We DO need
+# `text_layout`: it provides the real ParsedFont that parses cmap/glyph metrics.
+# Without it printpdf falls back to a stub ParsedFont whose glyph table is empty,
+# so external fonts collect zero "used glyphs" and silently get dropped from the
+# output (text renders blank). `png` is for embedding rasterized source pages.
+printpdf = { version = "0.9", default-features = false, features = ["png", "text_layout"] }
+# Glyph-advance measurement for our own text wrapping (decoupled from printpdf's
+# internal shaper); tiny, stable API.
+ttf-parser = "0.25"
+# Already present in Cargo.lock through existing dependencies; direct use for
+# pixel/content-addressed image caching adds no new compiled crate.
+sha2 = "0.10"
+# Already compiled through printpdf, with the same feature set. Used only to
+# detach translated text operators inside vector Forms (PDFium 7543 exposes a
+# read-only child collection); adds no new crate to the compiled dependency graph.
+lopdf = { version = "0.39.0", default-features = false, features = ["time"] }
+quick-xml = "0.40.1"
+# Live-caption system-audio loopback capture (Task B). Cross-platform audio I/O;
+# on Windows it opens the default OUTPUT device as input to capture the system
+# audio mix (WASAPI loopback auto-enabled when the device data-flow is render).
+# Small (well under the §18 10 MB rule) and reuses windows-rs underneath on Windows.
+cpal = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 macos-accessibility-client = "0.0.1"
@@ -60,3 +88,14 @@ window-shadows = "0.2"
 # this feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
+
+# Parsing a 16k-object technical manual is prohibitively slow with lopdf's
+# combinator parser unoptimized. Applies to dev/tests only; release is already optimized.
+[profile.dev.package.lopdf]
+opt-level = 2
+
+[profile.dev.package.memchr]
+opt-level = 3
+
+[profile.dev.package.nom_locate]
+opt-level = 3

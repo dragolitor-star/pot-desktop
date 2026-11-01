@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 import { Pagination } from '@nextui-org/react';
 import { useTranslation } from 'react-i18next';
-import Database from 'tauri-plugin-sql-api';
+import { openHistory } from '../../../../utils/history';
 
 import * as builtinCollectionServices from '../../../../services/collection';
 import { invoke_plugin } from '../../../../utils/invoke_plugin';
@@ -24,6 +24,7 @@ import {
     getServiceSouceType,
     whetherAvailableService,
 } from '../../../../utils/service_instance';
+
 
 export default function History() {
     const [collectionServiceList] = useConfig('collection_service_list', []);
@@ -45,33 +46,33 @@ export default function History() {
     }, [total, page]);
 
     const init = async () => {
-        const db = await Database.load('sqlite:history.db');
+        const db = await openHistory();
         const result = await db.select('SELECT COUNT(*) FROM history');
         if (result[0] && result[0]['COUNT(*)']) {
             setTotal(result[0]['COUNT(*)']);
         }
     };
     const getData = async () => {
-        const db = await Database.load('sqlite:history.db');
+        const db = await openHistory();
         let result = await db.select('SELECT * FROM history ORDER BY id DESC LIMIT 20 OFFSET $1', [20 * (page - 1)]);
         setItems(result);
     };
 
     const getSelectedData = async (id) => {
-        const db = await Database.load('sqlite:history.db');
+        const db = await openHistory();
         let result = await db.select('SELECT * FROM history WHERE id=$1', [id]);
         setSelectItem(result[0]);
     };
     const clearData = async () => {
-        const db = await Database.load('sqlite:history.db');
-        await db.execute('DROP TABLE history');
+        const db = await openHistory();
+        await db.execute('DELETE FROM history');
         await db.execute('VACUUM');
         setItems([]);
         setTotal(0);
         setPage(1);
     };
     const updateData = async () => {
-        const db = await Database.load('sqlite:history.db');
+        const db = await openHistory();
         await db.execute('UPDATE history SET text=$1, result=$2 WHERE id=$3', [
             selectedItem.text,
             selectedItem.result,

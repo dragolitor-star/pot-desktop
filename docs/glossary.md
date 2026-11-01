@@ -12,9 +12,9 @@ When translating text, the system fetches active glossary entries from the SQLit
    - An exact match on both `source_lang` and `target_lang` has higher priority than a wildcard match (`*`).
    - For example, if translating `en` to `tr`, an entry with `en -> tr` will be prioritized over an entry with `* -> tr` or `en -> *` or `* -> *`.
 
-2. **Domain-Scoped Match beats Global Match:**
-   - If a translation request provides a specific `scope` (e.g., `tech`), an entry with `scope = 'tech'` has higher priority than a global entry where `scope IS NULL`.
-   - Global entries are matched as fallbacks for all scopes.
+2. **Scope Boosts Priority, It Does NOT Exclude:**
+   - If a translation request provides a specific `scope` (e.g., `tech`), priority is: matching scope (`scope = 'tech'`) > global (`scope IS NULL`) > other scopes (e.g. `document`).
+   - Crucially, entries belonging to a *different* scope are still returned (ranked lowest), never filtered out — the scope only re-orders results.
 
 3. **Most Recently Updated Wins Ties:**
    - If multiple entries match with the same language and scope specificity, the entry with the most recent `updated_at` timestamp (i.e. `datetime(updated_at) DESC`) is chosen.
@@ -30,10 +30,14 @@ FROM glossaries
 WHERE active = 1
   AND (source_lang = ?1 OR source_lang = '*')
   AND (target_lang = ?2 OR target_lang = '*')
-  AND (?3 IS NULL OR scope IS NULL OR scope = ?3)
 ORDER BY
     (CASE WHEN source_lang = ?1 AND target_lang = ?2 THEN 0 ELSE 1 END) ASC,
-    (CASE WHEN ?3 IS NOT NULL AND scope = ?3 THEN 0 ELSE 1 END) ASC,
+    (CASE
+       WHEN ?3 IS NULL THEN 0
+       WHEN scope = ?3 THEN 0
+       WHEN scope IS NULL THEN 1
+       ELSE 2
+     END) ASC,
     datetime(updated_at) DESC;
 ```
 

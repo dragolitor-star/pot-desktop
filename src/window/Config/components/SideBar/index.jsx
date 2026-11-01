@@ -7,11 +7,13 @@ import { PiTextboxFill } from 'react-icons/pi';
 import { MdKeyboardAlt } from 'react-icons/md';
 import { MdMenuBook } from 'react-icons/md';
 import { MdInsertDriveFile } from 'react-icons/md';
+import { MdGraphicEq } from 'react-icons/md';
 import { MdExtension } from 'react-icons/md';
 import { AiFillCloud } from 'react-icons/ai';
 import { FaHistory } from 'react-icons/fa';
 import { Button } from '@nextui-org/react';
 import { invoke } from '@tauri-apps/api/tauri';
+import toast from 'react-hot-toast';
 import React from 'react';
 
 export default function SideBar() {
@@ -120,6 +122,21 @@ export default function SideBar() {
                 startContent={<MdInsertDriveFile className='text-[24px]' />}
             >
                 <div className='w-full'>{t('config.document.label')}</div>
+            </Button>
+            <Button
+                fullWidth
+                size='lg'
+                variant='light'
+                className='mb-[5px]'
+                onPress={() => {
+                    invoke('subtitle_window').catch((e) => {
+                        console.error('subtitle_window invoke failed:', e);
+                        toast.error(String(e));
+                    });
+                }}
+                startContent={<MdGraphicEq className='text-[24px]' />}
+            >
+                <div className='w-full'>{t('config.subtitle.label')}</div>
             </Button>
             <Button
                 fullWidth

@@ -1,1 +1,13 @@
+pub mod epub;
+pub mod export;
+pub mod image_service;
+pub mod image_text;
+pub mod image_translate;
+pub mod image_resources;
+pub mod image_ocr;
+mod lossless_pdf;
+pub mod form_text;
 pub mod pdf;
+pub mod pdf_layout;
+pub mod translate;
+pub mod unicode_text;

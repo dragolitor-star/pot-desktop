@@ -1,5 +1,23 @@
 # Architecture — CTranslate (Pot fork)
 
+## Local browser interface
+
+The installed app starts a loopback-only browser workspace alongside the existing
+Pot windows. `src-tauri/src/web_ui.rs` serves the Vite `workspace.html` entry on a
+random port. `src/browser/Workspace.jsx` reuses desktop React screens and service
+implementations. A per-launch bearer token, literal Host and Origin checks protect
+the browser IPC transport. `web_bridge.rs` routes commands to a hidden `bridge.html`
+Tauri worker; callback IDs and native events return through acknowledged polling.
+`web_fetch.rs` provides streaming native HTTP for browser provider code. Native
+screen capture and live-caption overlays remain OS windows. The previous Gemini
+quick interface in `web-ui/` remains available at `/quick`.
+
+This migration is in progress: native bridge integration and synthetic PDF/EPUB
+round trips pass, but the complete browser feature matrix and a fresh installer
+still need validation. Read `DEVIR-WEB-2026-11-01.md` first for the exact handoff,
+verification scope and remaining tasks. The historical sections below may describe
+earlier implementations. See `docs/web-ui.md` for runtime and data handling.
+
 > Audit performed against upstream commit at clone time (Pot 3.0.7, Tauri 1.6.8 in README — actual dep is tauri `1.8`).
 > Purpose: orient future work on Phases 1–9 (glossary, PDF/EPUB/subtitles, rebrand, distribution).
 
@@ -237,6 +255,13 @@ Phase 9 just needs: rebrand strings, swap pubkey/secrets, drop pot-docs trigger,
 **User docs** — `docs/glossary.md` covers directive #4 priority rules, directive #5 `.potext` limitation, JSON/CSV import format examples, debug recipes.
 
 ## 21. Phase 2 — PDF document translation (in progress)
+
+**2026-10-22 correction:** the layout export now uses canonical object-owned blocks,
+stable IDs, checked text-object removal, structured-response validation and in-place
+Gemini Vision image editing. Vector Form labels are handled separately without
+rasterizing their graphics. See [docs/pdf-layout.md](docs/pdf-layout.md) for the current
+contracts, cache v2 migration, native regression tests and pending live verification.
+The older phase notes below describe the original implementation.
 
 **Frontend** (`src/window/Document/index.jsx`)
 - Drag-drop + file picker for `.pdf`.

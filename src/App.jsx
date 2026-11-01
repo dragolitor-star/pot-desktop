@@ -13,9 +13,12 @@ import Updater from './window/Updater';
 import { store } from './utils/store';
 import Config from './window/Config';
 import Document from './window/Document';
+import Subtitle from './window/Subtitle';
+import LiveCaption from './window/LiveCaption';
 import { useConfig } from './hooks';
 import './style.css';
 import './i18n';
+import Workspace from './browser/Workspace';
 
 const windowMap = {
     translate: <Translate />,
@@ -24,6 +27,8 @@ const windowMap = {
     config: <Config />,
     updater: <Updater />,
     document: <Document />,
+    subtitle: <Subtitle />,
+    live_caption: <LiveCaption />,
 };
 
 export default function App() {
@@ -41,6 +46,7 @@ export default function App() {
     }, []);
 
     useEffect(() => {
+        if (window.__TT_BROWSER__) return;
         if (devMode !== null && devMode) {
             document.addEventListener('keydown', async (e) => {
                 let allowKeys = ['c', 'v', 'x', 'a', 'z', 'y'];
@@ -115,5 +121,5 @@ export default function App() {
         }
     }, [appFont, appFallbackFont, appFontSize]);
 
-    return <BrowserRouter>{windowMap[appWindow.label]}</BrowserRouter>;
+    return <BrowserRouter>{window.__TT_BROWSER__ ? <Workspace /> : windowMap[appWindow.label]}</BrowserRouter>;
 }

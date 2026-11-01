@@ -177,7 +177,45 @@
                 "title": "History"
             },
             "document": {
-                "label": "Document Translation"
+                "label": "Document Translation",
+                "exportLayout": "Translated PDF (layout-preserving)",
+                "exportLayoutDesc": "Edit the original PDF in place: keep images, vectors and page layout; replace the source text with the translation",
+                "translateImages": "Translate text in images",
+                "translateImagesDesc": "Translate text inside embedded images, including small badges and diagrams. Gemini Vision edits detected text regions and reuses cached images.",
+                "imageMethodGemini": "Gemini Vision (in place)",
+                "imageGeminiRequired": "Select a Gemini translation engine to use Gemini Vision for images.",
+                "ocrEngine": "Image OCR engine",
+                "imageMethod": "Image translation method",
+                "imageMethodOcr": "OCR + overlay (built-in)",
+                "imageMethodService": "Image service (PaddleOCR-VL)",
+                "imageServiceUrl": "Image service URL",
+                "imageServiceUrlDesc": "Base URL of the layout-image-translator service (e.g. http://127.0.0.1:8765). Each embedded image is sent to the service and replaced by its layout-preserved translation at the exact original position.",
+                "imageServiceDown": "Image translation service is not reachable at {{url}}. Start it with \"image-translator serve --host 127.0.0.1 --port 8765\" (or docker compose up) and try again.",
+                "imageServiceProgress": "Translating image {{done}}/{{total}} via service…",
+                "imageServiceAllFailed": "The image translation service was reachable but all {{total}} images failed to translate. Check the service terminal for errors and try again.",
+                "imageServicePartial": "{{ok}}/{{total}} images translated — failed ones keep their original."
+            },
+            "subtitle": {
+                "label": "Audio / Video Subtitles",
+                "live": {
+                    "title": "Live Captions (system audio)",
+                    "desc": "Transcribe & translate whatever is playing on this computer — any desktop or browser video — by capturing the system-audio mix (loopback). Gemini only; no browser extension needed.",
+                    "target": "Translate To",
+                    "engine": "Gemini Engine",
+                    "chunk": "Chunk (s)",
+                    "chunkDesc": "Seconds of audio per caption update (2–15). Lower = snappier captions but more API calls.",
+                    "start": "Start Live Caption",
+                    "stop": "Stop",
+                    "clickThrough": "Click-through",
+                    "clickThroughHint": "Let mouse clicks pass through the overlay to the window behind it. Toggle it back off here.",
+                    "started": "Live caption started — the overlay floats on top of your screen.",
+                    "listening": "Listening…",
+                    "transcribing": "Transcribing…",
+                    "stopped": "Stopped",
+                    "error": "Error",
+                    "overlayListening": "Listening to system audio…",
+                    "overlayTranslating": "translating…"
+                }
             },
             "glossary": {
                 "label": "Glossary",

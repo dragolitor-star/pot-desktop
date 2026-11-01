@@ -213,6 +213,17 @@ export default function Translate() {
         setServiceInstanceConfigMap({ ...config });
     };
     useEffect(() => {
+        if (!window.__TT_BROWSER__) return;
+        const refresh = event => {
+            if (event.detail === 'text' && [translateServiceInstanceList, recognizeServiceInstanceList, ttsServiceInstanceList, collectionServiceInstanceList].every(Array.isArray)) {
+                void loadServiceInstanceConfigMap();
+                void loadPluginList();
+            }
+        };
+        window.addEventListener('tt:active-view', refresh);
+        return () => window.removeEventListener('tt:active-view', refresh);
+    }, [translateServiceInstanceList, recognizeServiceInstanceList, ttsServiceInstanceList, collectionServiceInstanceList]);
+    useEffect(() => {
         if (
             translateServiceInstanceList !== null &&
             recognizeServiceInstanceList !== null &&

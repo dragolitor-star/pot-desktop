@@ -23,3 +23,33 @@ dist-ssr
 
 # Project handoff notes — local, never committed
 HANDOFF.md
+handovertoclaudecode.md
+
+# Local PDF fixtures, source-derived text and visual verification intermediates
+tmp/pdfs/
+output/pdf/
+.scripts/__pycache__/
+tmp/web-test-*
+tmp/web-fixtures/
+
+# Local build/test artifacts and extracted document content (not source code)
+/tmp/
+/output/
+/pot-desktop/
+/page4_text.txt
+/page6_text.txt
+/page6_words.txt
+/pdf_analysis.txt
+/pdf_diff.txt
+/pdf_p3.txt
+/pdf_tr_sample.txt
+/sim_04.txt
+/sim_085.txt
+/sim_comparison.txt
+/sim_comparison2.txt
+/sim_split.txt
+
+# Local credentials must never be included in a source handoff
+.env
+.env.*
+!.env.example

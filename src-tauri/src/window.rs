@@ -1,9 +1,11 @@
+#[cfg(target_os = "macos")]
 use std::fs;
 
 use crate::config::get;
 use crate::config::set;
 use crate::StringWrapper;
 use crate::APP;
+#[cfg(target_os = "macos")]
 use dirs::cache_dir;
 use log::{info, warn};
 use tauri::Manager;
@@ -75,7 +77,8 @@ fn build_window(label: &str, title: &str) -> (Window, bool) {
     match app_handle.get_window(label) {
         Some(v) => {
             info!("Window existence: {}", label);
-            v.set_focus().unwrap();
+            let _ = v.show();
+            let _ = v.set_focus();
             (v, true)
         }
         None => {
@@ -99,23 +102,31 @@ fn build_window(label: &str, title: &str) -> (Window, bool) {
             }
             #[cfg(not(target_os = "macos"))]
             {
-                builder = builder.transparent(true).decorations(false);
+                // Only overlay/popup windows need OS-level transparency. Normal
+                // feature windows (document, subtitle, config, …) must keep a
+                // standard decorated frame or they appear as an empty square.
+                if label == "translate" || label == "screenshot" || label == "live_caption" {
+                    builder = builder.transparent(true).decorations(false);
+                }
             }
             let window = builder.build().unwrap();
 
-            if label != "screenshot" {
+            // The fullscreen screenshot overlay and the transparent live-caption
+            // overlay are frameless/transparent; a window shadow would draw an ugly
+            // box around them, so skip it for those labels only (existing labels
+            // keep their shadow unchanged).
+            if label != "screenshot" && label != "live_caption" {
                 #[cfg(not(target_os = "linux"))]
                 set_shadow(&window, true).unwrap_or_default();
             }
             let _ = window.current_monitor();
             (window, false)
-
-
         }
     }
 }
 
 pub fn config_window() {
+    if crate::web_bridge::navigate("general", "", "") { return; }
     let (window, _exists) = build_window("config", "Config");
     window
         .set_min_size(Some(tauri::LogicalSize::new(800, 400)))
@@ -236,6 +247,9 @@ pub fn selection_translate() {
         state.0.lock().unwrap().replace_range(.., &text);
     }
 
+    if crate::web_bridge::navigate("text", "new_text", &text) {
+        let _ = APP.get().unwrap().emit_all("new_text", &text); return;
+    }
     let window = translate_window();
     window.emit("new_text", text).unwrap();
 }
@@ -249,6 +263,9 @@ pub fn input_translate() {
         .lock()
         .unwrap()
         .replace_range(.., "[INPUT_TRANSLATE]");
+    if crate::web_bridge::navigate("text", "new_text", "[INPUT_TRANSLATE]") {
+        let _ = app_handle.emit_all("new_text", "[INPUT_TRANSLATE]"); return;
+    }
     let window = translate_window();
     let position_type = match get("translate_window_position") {
         Some(v) => v.as_str().unwrap().to_string(),
@@ -266,6 +283,9 @@ pub fn text_translate(text: String) {
     // Clear State
     let state: tauri::State<StringWrapper> = app_handle.state();
     state.0.lock().unwrap().replace_range(.., &text);
+    if crate::web_bridge::navigate("text", "new_text", &text) {
+        let _ = app_handle.emit_all("new_text", &text); return;
+    }
     let window = translate_window();
     window.emit("new_text", text).unwrap();
 }
@@ -278,11 +298,17 @@ pub fn image_translate() {
         .lock()
         .unwrap()
         .replace_range(.., "[IMAGE_TRANSLATE]");
+    if crate::web_bridge::navigate("text", "new_text", "[IMAGE_TRANSLATE]") {
+        let _ = app_handle.emit_all("new_text", "[IMAGE_TRANSLATE]"); return;
+    }
     let window = translate_window();
     window.emit("new_text", "[IMAGE_TRANSLATE]").unwrap();
 }
 
 pub fn recognize_window() {
+    if crate::web_bridge::navigate("ocr", "new_image", "") {
+        let _ = APP.get().unwrap().emit_all("new_image", ""); return;
+    }
     let (window, exists) = build_window("recognize", "Recognize");
     if exists {
         window.emit("new_image", "").unwrap();
@@ -414,10 +440,57 @@ pub fn updater_window() {
 
 #[tauri::command(async)]
 pub fn document_window() {
+    if crate::web_bridge::navigate("document", "", "") { return; }
     let (window, _exists) = build_window("document", "Document");
+    let _ = window.show();
     window
         .set_min_size(Some(tauri::LogicalSize::new(800, 600)))
         .unwrap();
     window.set_size(tauri::LogicalSize::new(1000, 750)).unwrap();
     window.center().unwrap();
+    let _ = window.set_focus();
+}
+
+#[tauri::command(async)]
+pub fn subtitle_window() {
+    if crate::web_bridge::navigate("subtitle", "", "") { return; }
+    let (window, _exists) = build_window("subtitle", "Subtitle");
+    let _ = window.show();
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(800, 600)))
+        .unwrap();
+    window.set_size(tauri::LogicalSize::new(1000, 750)).unwrap();
+    window.center().unwrap();
+    let _ = window.set_focus();
+}
+
+// Transparent, always-on-top, frameless live-caption overlay (Task B). Modeled on
+// the screenshot overlay: skip the taskbar, float above other windows, and (on
+// non-macOS) it is transparent + undecorated via `build_window`. Placed bottom-
+// centre of the current monitor; the user can drag it from there. Click-through is
+// toggled from the renderer (`appWindow.setIgnoreCursorEvents`).
+#[tauri::command(async)]
+pub fn live_caption_window() {
+    let (window, exists) = build_window("live_caption", "Live Caption");
+    if exists {
+        let _ = window.set_focus();
+        return;
+    }
+    let _ = window.set_skip_taskbar(true);
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_decorations(false);
+
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let size = monitor.size();
+        let position = monitor.position();
+        let scale = monitor.scale_factor();
+        let monitor_w = size.width as f64;
+        let monitor_h = size.height as f64;
+        let caption_w = (monitor_w * 0.62).min(1100.0 * scale);
+        let caption_h = 170.0 * scale;
+        let x = position.x as f64 + (monitor_w - caption_w) / 2.0;
+        let y = position.y as f64 + monitor_h - caption_h - 90.0 * scale;
+        let _ = window.set_size(tauri::PhysicalSize::new(caption_w, caption_h));
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    }
 }

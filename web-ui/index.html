@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>TurkTranslate — Belge çevirisi</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">文<span>A</span></span><div><strong>TurkTranslate</strong><small>BELGE ÇALIŞMA ALANI</small></div></div>
+      <div class="sidebar-label">ÇALIŞMA ALANI</div>
+      <button class="nav-item" id="nav-text" type="button"><span class="nav-icon">文</span> Metin çevirisi</button>
+      <button class="nav-item active" id="nav-document" type="button"><span class="nav-icon">▤</span> Belge çevirisi</button>
+      <button class="nav-item" id="nav-glossary" type="button"><span class="nav-icon">▧</span> Terim sözlüğü</button>
+      <button class="nav-item" id="nav-media" type="button"><span class="nav-icon">♫</span> Ses ve video</button>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Yerel çalışma alanı</strong><small>Bu bilgisayarda çalışıyor</small></div></div>
+    </aside>
+    <main>
+      <header class="topbar"><div><span class="breadcrumb">Çalışma alanı</span><span class="breadcrumb slash">/</span><span id="current-view">Belge çevirisi</span></div><span class="local-badge"><span class="status-dot"></span> Yerel bağlantı</span></header>
+      <div class="content">
+        <div id="document-view"><div class="intro"><div><div class="eyebrow">BELGE ÇEVİRİSİ <span></span> PDF / EPUB</div><h1>Belgeler, kendi düzeninde.</h1><p>PDF veya EPUB dosyanızı yükleyin, dilinizi seçin ve çevrilmiş belgenizi indirin.</p></div><div class="intro-tag"><span>✧</span> Gemini ile çeviri</div></div>
+        <div class="workspace">
+          <section class="main-column" aria-label="Belge">
+            <div class="section-head"><div><span class="step-number">01</span><h2>Belgeniz</h2></div><span class="section-sub">PDF / EPUB · en fazla 100 MB</span></div>
+            <div class="upload-card" id="dropzone" tabindex="0" role="button" aria-label="PDF veya EPUB dosyası seçin veya buraya bırakın">
+              <div class="file-symbol">▤</div><h3>Dosyanızı buraya bırakın</h3><p>veya bilgisayarınızdan PDF / EPUB seçin</p><button class="button button-outline" id="choose" type="button">Dosya seç <span>↗</span></button><input type="file" id="file" accept="application/pdf,application/epub+zip,.pdf,.epub" hidden>
+            </div>
+            <div id="file-summary" class="file-summary hidden"><div id="file-type" class="file-thumb">PDF</div><div class="file-meta"><strong id="file-name"></strong><span id="file-info"></span></div><button class="text-button" id="change-file" type="button">Değiştir</button></div>
+            <div id="progress-card" class="progress-card hidden" aria-live="polite"><div class="progress-top"><div><strong id="progress-title">Hazırlanıyor</strong><p id="progress-message"></p></div><span id="progress-value">0%</span></div><div class="progress-track"><div id="progress-bar"></div></div><button id="cancel" class="text-button hidden" type="button">İşlemi durdur</button></div>
+            <div id="result-card" class="result-card hidden"><div class="result-icon">✓</div><div><strong>Çeviriniz hazır</strong><p id="result-description">Çevrilmiş belgenizi indirebilirsiniz.</p></div><button class="button button-dark" id="download" type="button">Belgeyi indir <span>↓</span></button></div>
+            <div id="reader" class="reader hidden"><div class="reader-head"><div><div class="eyebrow">ÇEVİRİ ÖNİZLEMESİ</div><h2>Metinleri karşılaştırın</h2></div><span id="reader-count"></span></div><div class="reader-columns"><span>ORİJİNAL</span><span>ÇEVİRİ</span></div><div id="pages"></div></div>
+            <div id="notice" class="notice hidden" role="alert"></div>
+          </section>
+          <aside class="settings-column"><div class="section-head"><div><span class="step-number">02</span><h2>Çeviri ayarları</h2></div></div><div class="settings-card">
+            <label for="source">Kaynak dil</label><select id="source"><option value="auto">Otomatik algıla</option><option value="zh_cn">Çince (Basitleştirilmiş)</option><option value="en">İngilizce</option><option value="tr">Türkçe</option><option value="de">Almanca</option><option value="fr">Fransızca</option><option value="es">İspanyolca</option><option value="ja">Japonca</option><option value="ko">Korece</option></select>
+            <div class="direction">↓</div>
+            <label for="target">Hedef dil</label><select id="target"><option value="tr">Türkçe</option><option value="en">İngilizce</option><option value="de">Almanca</option><option value="fr">Fransızca</option><option value="es">İspanyolca</option></select>
+            <div class="divider"></div><div class="setting-title"><span>✦</span><div><strong>Gemini</strong><small>Çeviri sağlayıcısı</small></div></div>
+            <label for="model">Model adı</label><input id="model" value="gemini-3.6-flash" autocomplete="off" spellcheck="false">
+            <label for="key">API anahtarı</label><input id="key" type="password" autocomplete="off" placeholder="Gemini API anahtarınız"><small class="help">Anahtar bu oturum boyunca kullanılır; tekrar açtığınızda girmeniz gerekir.</small>
+            <label for="rpm">Dakikadaki istek sınırı</label><input id="rpm" type="number" min="1" max="600" value="10">
+            <label class="check-row hidden" id="bilingual-row"><input id="bilingual" type="checkbox"> EPUB içinde orijinal metni de göster</label>
+            <label class="check-row" id="images-row"><input id="translate-images" type="checkbox"> PDF görsellerindeki yazıları da çevir</label>
+            <button class="button button-primary" id="translate" type="button" disabled>Çeviriyi başlat <span>→</span></button>
+          </div><div class="side-note"><span>ⓘ</span><p>Görsel çevirisi seçilirse görseller Gemini'ye gönderilir ve OCR dil verileri indirilir. Desenli PDF'lerde görsel çevirisi henüz desteklenmeyebilir.</p></div></aside>
+        </div></div>
+        <section id="glossary-view" class="hidden"><div class="intro"><div><div class="eyebrow">ÇALIŞMA ALANI <span></span> SÖZLÜK</div><h1>Terimleriniz, tutarlı çeviri.</h1><p>Belge çevirilerinde kullanılacak karşılıkları yönetin.</p></div></div>
+          <div class="glossary-layout"><form id="glossary-form" class="settings-card"><div class="section-head"><h2 id="glossary-form-title">Yeni terim</h2></div>
+            <label for="term-source">Kaynak terim</label><input id="term-source" maxlength="500" required>
+            <label for="term-target">Çeviri</label><input id="term-target" maxlength="500" required>
+            <label for="term-source-lang">Kaynak dil kodu</label><input id="term-source-lang" value="en" maxlength="10" required>
+            <label for="term-target-lang">Hedef dil kodu</label><input id="term-target-lang" value="tr" maxlength="10" required>
+            <label for="term-scope">Alan (isteğe bağlı)</label><input id="term-scope" placeholder="Örn. document">
+            <label for="term-notes">Notlar (isteğe bağlı)</label><input id="term-notes">
+            <label class="check-row"><input id="term-active" type="checkbox" checked> Aktif</label>
+            <label class="check-row"><input id="term-case" type="checkbox"> Büyük/küçük harfe duyarlı</label>
+            <button class="button button-primary" type="submit">Terimi kaydet <span>→</span></button><button class="text-button" id="term-cancel" type="button">Formu temizle</button>
+          </form><div class="reader glossary-list"><div class="reader-head"><div><div class="eyebrow">KAYITLI TERİMLER</div><h2>Sözlüğünüz</h2></div><span id="glossary-count"></span></div><div class="glossary-tools"><button id="glossary-import" class="button button-outline" type="button">JSON içe aktar</button><button id="glossary-export" class="button button-outline" type="button">JSON dışa aktar</button><input type="file" id="glossary-file" accept="application/json,.json" hidden></div><div id="glossary-items"></div></div></div>
+          <div id="glossary-notice" class="notice hidden" role="alert"></div>
+        </section>
+        <section id="media-view" class="hidden"><div class="intro"><div><div class="eyebrow">ALTYAZI <span></span> SES / VİDEO</div><h1>Konuşmayı yazıya dönüştürün.</h1><p>Medyanızdaki konuşmayı algılayın, çevirin ve altyazı dosyası olarak indirin.</p></div></div>
+          <div class="workspace"><div><div class="section-head"><div><span class="step-number">01</span><h2>Medya dosyası</h2></div><span class="section-sub">Ses / video · en fazla 2 GB</span></div>
+            <div class="upload-card" id="media-dropzone"><div class="file-symbol">♫</div><h3>Ses veya video seçin</h3><p>Desteklenen bir dosyayı bilgisayarınızdan yükleyin.</p><button class="button button-outline" id="media-choose" type="button">Dosya seç <span>↗</span></button><input id="media-file" type="file" accept=".mp3,.wav,.m4a,.aac,.ogg,.oga,.flac,.aiff,.aif,.opus,.mp4,.m4v,.mov,.mkv,.webm,.avi,.mpeg,.mpg,.wmv,.flv,.3gp" hidden></div>
+            <div id="media-file-summary" class="file-summary hidden"><div class="file-thumb">SES</div><div class="file-meta"><strong id="media-file-name"></strong><span id="media-file-info"></span></div><button id="media-change" class="text-button" type="button">Değiştir</button></div>
+            <div id="media-progress" class="progress-card hidden" aria-live="polite"><div class="progress-top"><div><strong id="media-progress-title">İşleniyor</strong><p id="media-message"></p></div><span id="media-percent">0%</span></div><div class="progress-track"><div id="media-bar"></div></div><button id="media-cancel" class="text-button" type="button">İşlemi durdur</button></div>
+            <div id="media-result" class="reader hidden"><div class="reader-head"><div><div class="eyebrow">ALTYAZI ÖNİZLEMESİ</div><h2>Konuşma metinleri</h2></div><span id="media-count"></span></div><div id="media-cues"></div><div class="subtitle-export"><label for="subtitle-format">İndirme biçimi</label><select id="subtitle-format"><option value="srt">SRT</option><option value="vtt">WebVTT</option></select><select id="subtitle-mode" aria-label="Altyazı dili"><option value="translated">Çeviri</option><option value="bilingual">Orijinal ve çeviri</option><option value="original">Orijinal</option></select><button id="subtitle-download" class="button button-dark" type="button">Altyazıyı indir ↓</button></div></div>
+            <div id="media-notice" class="notice hidden" role="alert"></div>
+          </div><aside><div class="section-head"><div><span class="step-number">02</span><h2>Altyazı ayarları</h2></div></div><div class="settings-card">
+            <label for="media-source">Konuşulan dil</label><select id="media-source"><option value="auto">Otomatik algıla</option><option value="zh_cn">Çince</option><option value="en">İngilizce</option><option value="tr">Türkçe</option><option value="de">Almanca</option><option value="fr">Fransızca</option><option value="ja">Japonca</option><option value="ko">Korece</option></select>
+            <label for="media-target">Çeviri dili</label><select id="media-target"><option value="tr">Türkçe</option><option value="en">İngilizce</option><option value="de">Almanca</option><option value="fr">Fransızca</option></select>
+            <label for="media-model">Gemini modeli</label><input id="media-model" value="gemini-3.6-flash" autocomplete="off">
+            <label for="media-key">Gemini API anahtarı</label><input id="media-key" type="password" autocomplete="off" placeholder="Gemini API anahtarınız">
+            <label for="media-rpm">Dakikadaki istek sınırı</label><input id="media-rpm" type="number" min="1" max="600" value="10">
+            <button id="media-transcribe" class="button button-primary" type="button" disabled>Konuşmayı metne dönüştür →</button>
+            <button id="media-translate" class="button button-outline media-button" type="button" disabled>Altyazıyı çevir →</button>
+          </div><div class="side-note"><span>ⓘ</span><p>Ses veya video, konuşmayı tanımak için Gemini'ye yüklenir.</p></div>
+          <div class="settings-card live-card"><div class="setting-title"><span>◉</span><div><strong>Canlı altyazı</strong><small>Bilgisayarın sistem sesi</small></div></div><p>Başlattığınızda bilgisayarın çaldığı ses Gemini'ye gönderilir.</p>
+            <label for="live-seconds">Ses parçası süresi (saniye)</label><input id="live-seconds" type="number" min="2" max="15" value="5">
+            <label class="check-row"><input id="live-overlay" type="checkbox"> Ekranda altyazı katmanı aç</label><label class="check-row"><input id="live-passthrough" type="checkbox"> Katmanda fare tıklamalarını geçir</label>
+            <button id="live-start" class="button button-primary" type="button">Canlı altyazıyı başlat →</button><button id="live-stop" class="button button-outline media-button" type="button" disabled>Canlı altyazıyı durdur</button>
+            <div class="live-output"><strong id="live-status">Kapalı</strong><p id="live-original"></p><p id="live-translation"></p></div><small class="help">Tarayıcı bağlantısı 30 saniye kesilirse yakalama durur.</small>
+          </div></aside></div>
+        </section>
+        <section id="text-view" class="hidden"><div class="intro"><div><div class="eyebrow">ÇEVİRİ <span></span> METİN</div><h1>Kelimeler, yerini bulsun.</h1><p>Metninizi girin, çevirin ve sonucu kopyalayın veya dinleyin.</p></div></div>
+          <div class="workspace"><div><div class="section-head"><div><span class="step-number">01</span><h2>Metin</h2></div></div><div class="reader text-workspace"><label for="text-input">Orijinal</label><textarea id="text-input" rows="9" placeholder="Çevirmek istediğiniz metni buraya yazın…"></textarea><div class="text-actions"><button id="text-clear" class="text-button" type="button">Temizle</button><span id="text-length">0 karakter</span></div><div class="divider"></div><label for="text-output">Çeviri</label><textarea id="text-output" rows="9" placeholder="Çeviri burada görünecek…" readonly></textarea><div class="text-actions"><div><button id="text-copy" class="text-button" type="button">Kopyala</button><button id="text-speak" class="text-button" type="button">Seslendir</button></div><button id="text-cancel" class="text-button hidden" type="button">Durdur</button></div></div><div id="text-notice" class="notice hidden" role="alert"></div></div>
+          <aside><div class="section-head"><div><span class="step-number">02</span><h2>Çeviri ayarları</h2></div></div><div class="settings-card"><label for="text-source">Kaynak dil</label><select id="text-source"><option value="auto">Otomatik algıla</option><option value="zh_cn">Çince</option><option value="en">İngilizce</option><option value="tr">Türkçe</option><option value="de">Almanca</option><option value="fr">Fransızca</option><option value="ja">Japonca</option><option value="ko">Korece</option></select><label for="text-target">Hedef dil</label><select id="text-target"><option value="tr">Türkçe</option><option value="en">İngilizce</option><option value="de">Almanca</option><option value="fr">Fransızca</option></select><label for="text-model">Gemini modeli</label><input id="text-model" value="gemini-3.6-flash" autocomplete="off"><label for="text-key">Gemini API anahtarı</label><input id="text-key" type="password" autocomplete="off" placeholder="Gemini API anahtarınız"><button id="text-start" class="button button-primary" type="button">Çevir →</button></div></aside></div>
+        </section>
+        <footer>TurkTranslate <span>·</span> Belgeniz bu bilgisayarda işlenir. Çeviri metinleri seçilen sağlayıcıya gönderilir.</footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

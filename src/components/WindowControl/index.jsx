@@ -11,14 +11,18 @@ export default function WindowControl() {
     const [isMax, setIsMax] = useState(false);
 
     useEffect(() => {
-        listen('tauri://resize', async () => {
+        if (window.__TT_BROWSER__) return;
+        const unlisten = listen('tauri://resize', async () => {
             if (await appWindow.isMaximized()) {
                 setIsMax(true);
             } else {
                 setIsMax(false);
             }
         });
+        return () => { unlisten.then(fn => fn()); };
     }, []);
+
+    if (window.__TT_BROWSER__) return null;
 
     return (
         <div>

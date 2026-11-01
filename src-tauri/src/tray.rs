@@ -55,7 +55,7 @@ pub fn update_tray(app_handle: tauri::AppHandle, mut language: String, mut copy_
             "fa" => tray_menu_fa(),
             "uk" => tray_menu_uk(),
             _ => tray_menu_en(),
-        })
+        }.add_item(CustomMenuItem::new("web_ui", "Web arayüzünü aç")))
         .unwrap();
     #[cfg(not(target_os = "linux"))]
     tray_handle
@@ -110,6 +110,7 @@ pub fn tray_event_handler<'a>(app: &'a AppHandle, event: SystemTrayEvent) {
             "ocr_recognize" => on_ocr_recognize_click(),
             "ocr_translate" => on_ocr_translate_click(),
             "config" => on_config_click(),
+            "web_ui" => { if let Err(e) = crate::web_ui::open(app) { log::warn!("Cannot open web interface: {e}"); } },
             "check_update" => on_check_update_click(),
             "view_log" => on_view_log_click(app),
             "restart" => on_restart_click(app),
@@ -198,6 +199,7 @@ fn on_restart_click(app: &AppHandle) {
     app.restart();
 }
 fn on_quit_click(app: &AppHandle) {
+    crate::web_ui::cleanup();
     app.global_shortcut_manager().unregister_all().unwrap();
     info!("============== Quit App ==============");
     app.exit(0);

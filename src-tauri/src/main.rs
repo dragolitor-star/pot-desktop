@@ -11,23 +11,35 @@ mod error;
 mod glossary;
 mod hotkey;
 mod lang_detect;
+mod media;
 mod screenshot;
 mod server;
 mod system_ocr;
 mod tray;
 mod updater;
 mod window;
+mod web_ui;
+mod web_bridge;
+mod web_fetch;
 
 use backup::*;
 use cache::*;
 use clipboard::*;
 use cmd::*;
 use config::*;
+use document::epub::*;
+use document::export::*;
+use document::image_service::*;
+use document::image_text::*;
 use document::pdf::*;
+use document::pdf_layout::*;
+use document::translate::*;
 use glossary::*;
 use hotkey::*;
 use lang_detect::*;
 use log::info;
+use media::live_caption::*;
+use media::*;
 use once_cell::sync::OnceCell;
 use screenshot::screenshot;
 use server::*;
@@ -37,10 +49,10 @@ use tauri::api::notification::Notification;
 use tauri::Manager;
 use tauri_plugin_log::LogTarget;
 use tray::*;
-use updater::check_update;
-use window::config_window;
-use window::updater_window;
 use window::document_window;
+use window::live_caption_window;
+use window::subtitle_window;
+use window::updater_window;
 
 // Global AppHandle
 pub static APP: OnceCell<tauri::AppHandle> = OnceCell::new();
@@ -95,16 +107,20 @@ fn main() {
             // Init translation cache DB (Phase 2 optimization)
             init_cache_db(app);
             // Check First Run
-            if is_first_run() {
-                // Open Config Window
-                info!("First Run, opening config window");
-                config_window();
-            }
+            if is_first_run() { info!("First run"); }
             app.manage(StringWrapper(Mutex::new("".to_string())));
             // Update Tray Menu
             update_tray(app.app_handle(), "".to_string(), "".to_string());
             // Start http server
             start_server();
+            if let Err(e) = web_bridge::start(&app.handle()) { log::error!("Web service worker failed: {e}"); }
+            if let Err(e) = web_ui::start(app.handle()) {
+                log::error!("Web interface failed to start: {e}");
+                let _ = Notification::new(app.config().tauri.bundle.identifier.clone())
+                    .title("Web arayüzü açılamadı")
+                    .body(&e)
+                    .show();
+            }
             // Register Global Shortcut
             match register_shortcut("all") {
                 Ok(()) => {}
@@ -117,14 +133,16 @@ fn main() {
             }
             match get("proxy_enable") {
                 Some(v) => {
-                    if v.as_bool().unwrap() && get("proxy_host").map_or(false, |host| !host.as_str().unwrap().is_empty()) {
+                    if v.as_bool().unwrap()
+                        && get("proxy_host")
+                            .map_or(false, |host| !host.as_str().unwrap().is_empty())
+                    {
                         let _ = set_proxy();
                     }
                 }
                 None => {}
             }
-            // Check Update
-            check_update(app.handle());
+            // Update checks are available from the tray when explicitly requested.
             if let Some(engine) = get("translate_detect_engine") {
                 if engine.as_str().unwrap() == "local" {
                     init_lang_detect();
@@ -144,6 +162,12 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            web_bridge::web_bridge_ready,
+            web_bridge::web_bridge_publish,
+            web_bridge::web_desktop_action,
+            web_bridge::web_import_image,
+            web_fetch::web_fetch_start,
+            web_fetch::web_fetch_cancel,
             reload_store,
             get_text,
             cut_image,
@@ -170,8 +194,27 @@ fn main() {
             delete_glossary_entry,
             list_glossaries,
             extract_pdf_pages,
+            extract_pdf_layout,
             render_pdf_page,
+            export_translated_pdf,
+            export_layout_pdf,
+            cancel_layout_export,
+            document::image_ocr::submit_layout_image_ocr,
+            extract_pdf_images,
+            scan_pdf_images,
+            check_image_service,
+            translate_image_via_service,
+            extract_epub,
+            assemble_epub,
+            translate_document,
+            cancel_document_translation,
+            transcribe_media,
+            cancel_transcription,
+            start_live_caption,
+            stop_live_caption,
             document_window,
+            subtitle_window,
+            live_caption_window,
             cache_get_translation,
             cache_set_translation,
             cache_stats,

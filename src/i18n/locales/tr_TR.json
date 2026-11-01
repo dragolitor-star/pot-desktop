@@ -85,7 +85,45 @@
             "about": {},
             "history": {},
             "document": {
-                "label": "Belge Çevirisi"
+                "label": "Belge Çevirisi",
+                "exportLayout": "Çevrilmiş PDF (düzeni koruyan)",
+                "exportLayoutDesc": "Orijinal PDF'i yerinde düzenler: görselleri, vektörleri ve sayfa düzenini korur; kaynak metni çeviriyle değiştirir",
+                "translateImages": "Görsellerdeki yazıları da çevir",
+                "translateImagesDesc": "Küçük etiketler ve diyagramlar dahil gömülü görsellerdeki yazıları çevirir. Gemini Vision algılanan yazı bölgelerini düzenler ve önbellekteki görselleri yeniden kullanır.",
+                "imageMethodGemini": "Gemini Vision (yerinde)",
+                "imageGeminiRequired": "Görsellerde Gemini Vision kullanmak için Gemini çeviri motoru seçin.",
+                "ocrEngine": "Görsel OCR motoru",
+                "imageMethod": "Görsel çeviri yöntemi",
+                "imageMethodOcr": "OCR + bindirme (dahili)",
+                "imageMethodService": "Görsel servisi (PaddleOCR-VL)",
+                "imageServiceUrl": "Görsel servisi adresi",
+                "imageServiceUrlDesc": "layout-image-translator servisinin adresi (örn. http://127.0.0.1:8765). Her gömülü görsel servise gönderilir ve düzeni korunmuş çevirisi, orijinal konumuna birebir yerleştirilir.",
+                "imageServiceDown": "Görsel çeviri servisine {{url}} adresinden ulaşılamıyor. \"image-translator serve --host 127.0.0.1 --port 8765\" (veya docker compose up) ile başlatıp yeniden deneyin.",
+                "imageServiceProgress": "Görsel {{done}}/{{total}} servis üzerinden çevriliyor…",
+                "imageServiceAllFailed": "Görsel çeviri servisine ulaşıldı ancak {{total}} görselin tamamı çevrilemedi. Servis terminalindeki hatalara bakıp yeniden deneyin.",
+                "imageServicePartial": "{{ok}}/{{total}} görsel çevrildi — başarısız olanlar orijinal haliyle bırakıldı."
+            },
+            "subtitle": {
+                "label": "Ses / Video Altyazı",
+                "live": {
+                    "title": "Canlı Altyazı (sistem sesi)",
+                    "desc": "Bu bilgisayarda çalan her şeyi — herhangi bir masaüstü veya tarayıcı videosunu — sistem ses karışımını (loopback) yakalayarak yazıya döker ve çevirir. Yalnızca Gemini; tarayıcı eklentisi gerekmez.",
+                    "target": "Şuna Çevir",
+                    "engine": "Gemini Motoru",
+                    "chunk": "Parça (sn)",
+                    "chunkDesc": "Her altyazı güncellemesi başına ses süresi (2–15 sn). Düşük = daha hızlı altyazı ama daha çok API çağrısı.",
+                    "start": "Canlı Altyazıyı Başlat",
+                    "stop": "Durdur",
+                    "clickThrough": "Tıklama-geçirgen",
+                    "clickThroughHint": "Fare tıklamalarının kaplamanın altındaki pencereye geçmesini sağlar. Tekrar kapatmak için buradan değiştirin.",
+                    "started": "Canlı altyazı başladı — kaplama ekranınızın üzerinde duruyor.",
+                    "listening": "Dinleniyor…",
+                    "transcribing": "Yazıya dökülüyor…",
+                    "stopped": "Durduruldu",
+                    "error": "Hata",
+                    "overlayListening": "Sistem sesi dinleniyor…",
+                    "overlayTranslating": "çevriliyor…"
+                }
             },
             "glossary": {
                 "label": "Sözlük",

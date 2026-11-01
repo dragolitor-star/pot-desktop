@@ -13,11 +13,12 @@ import { Language } from './index';
 
 export const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
 
-// API model IDs verified against https://ai.google.dev/gemini-api/docs/models on 2026-05-24.
-// NOTE: "gemini-3-flash" (without suffix) is NOT a valid API ID — Google ships it only as
-// "gemini-3-flash-preview". Default ships the most capable Stable Flash (gemini-3.5-flash).
+// Model IDs checked against https://ai.google.dev/gemini-api/docs/models on 2026-10-22.
+// Existing saved model selections are retained. The 3.5 Flash alias routes to 3.6.
 export const GEMINI_MODEL_PRESETS = [
-    { key: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', default: true },
+    { key: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', default: true },
+    { key: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
+    { key: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash (legacy alias)' },
     { key: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (cheaper)' },
     { key: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', preview: true },
     { key: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', preview: true },

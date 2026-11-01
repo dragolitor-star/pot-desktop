@@ -44,6 +44,20 @@ const SCHEMA_V1: &str = "
         ON translation_cache(last_used_at);
 ";
 
+const SCHEMA_V2: &str = "
+    CREATE TABLE IF NOT EXISTS image_translation_cache (
+        hash TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        src_lang TEXT NOT NULL,
+        tgt_lang TEXT NOT NULL,
+        png BLOB NOT NULL,
+        regions_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_used_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_image_cache_last_used ON image_translation_cache(last_used_at);
+";
+
 pub struct CacheDb(pub Mutex<Connection>);
 
 /// Open (or create) the translation cache DB and run any pending migrations.
@@ -51,9 +65,9 @@ pub struct CacheDb(pub Mutex<Connection>);
 pub fn init_cache_db(app: &mut tauri::App) {
     match try_init(app) {
         Ok(()) => info!("Translation cache initialized"),
-        Err(e) => warn!(
-            "Translation cache init failed: {e} — translations won't be reused across runs"
-        ),
+        Err(e) => {
+            warn!("Translation cache init failed: {e} — translations won't be reused across runs")
+        }
     }
 }
 
@@ -94,7 +108,95 @@ fn run_migrations(conn: &Connection) -> Result<(), Error> {
         )?;
         info!("Translation cache schema migrated to v1");
     }
+    if current < 2 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V2)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (2, datetime('now'))",
+            [],
+        )?;
+        tx.commit()?;
+        info!("Translation cache schema migrated to v2 (translated images)");
+    }
     Ok(())
+}
+
+pub(crate) fn cached_image(app: &tauri::AppHandle, hash: &str) -> Result<Option<Vec<u8>>, String> {
+    use rusqlite::OptionalExtension;
+    let state = app
+        .try_state::<CacheDb>()
+        .ok_or("Translation cache not initialized")?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = conn
+        .query_row(
+            "SELECT png FROM image_translation_cache WHERE hash=?1",
+            [hash],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if result.is_some() {
+        conn.execute(
+            "UPDATE image_translation_cache SET last_used_at=datetime('now') WHERE hash=?1",
+            [hash],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(result)
+}
+
+pub(crate) fn cache_image(
+    app: &tauri::AppHandle,
+    hash: &str,
+    model: &str,
+    src: &str,
+    tgt: &str,
+    png: &[u8],
+    regions: &str,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<CacheDb>()
+        .ok_or("Translation cache not initialized")?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("INSERT OR REPLACE INTO image_translation_cache(hash,model,src_lang,tgt_lang,png,regions_json) VALUES (?1,?2,?3,?4,?5,?6)",params![hash,model,src,tgt,png,regions]).map_err(|e|e.to_string())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod image_cache_tests {
+    use super::*;
+    #[test]
+    fn versioned_migration_preserves_text_cache_and_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute("INSERT INTO image_translation_cache(hash,model,src_lang,tgt_lang,png,regions_json) VALUES ('hash','model','zh','tr',?1,'[]')",[vec![1_u8,2,3]]).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT png FROM image_translation_cache", [], |r| r
+                .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM translation_cache", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(clear_entries(&conn, None).unwrap(), 1);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM image_translation_cache", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 }
 
 /// Look up a cached translation by hash. Returns None on miss or any error.
@@ -149,7 +251,14 @@ pub fn cache_set_translation(
             (hash, model, src_lang, tgt_lang, source_text, translated_text,
              created_at, last_used_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
-        params![hash, model, src_lang, tgt_lang, source_text, translated_text],
+        params![
+            hash,
+            model,
+            src_lang,
+            tgt_lang,
+            source_text,
+            translated_text
+        ],
     )
     .map_err(|e| e.to_string())?;
 
@@ -200,18 +309,24 @@ pub fn cache_clear(older_than_days: Option<i64>) -> Result<i64, String> {
         .ok_or_else(|| "Translation cache not initialized".to_string())?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
-    let affected = match older_than_days {
-        Some(days) => conn
-            .execute(
-                "DELETE FROM translation_cache
-                 WHERE last_used_at < datetime('now', '-' || ?1 || ' days')",
-                params![days],
-            )
-            .map_err(|e| e.to_string())?,
-        None => conn
-            .execute("DELETE FROM translation_cache", [])
-            .map_err(|e| e.to_string())?,
-    };
+    clear_entries(&conn, older_than_days)
+}
 
+fn clear_entries(conn: &Connection, older_than_days: Option<i64>) -> Result<i64, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut affected = 0;
+    for table in ["translation_cache", "image_translation_cache"] {
+        affected += match older_than_days {
+            Some(days) => tx.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE last_used_at<datetime('now','-' || ?1 || ' days')"
+                ),
+                params![days],
+            ),
+            None => tx.execute(&format!("DELETE FROM {table}"), []),
+        }
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(affected as i64)
 }
